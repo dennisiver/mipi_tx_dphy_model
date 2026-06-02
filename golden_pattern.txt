@@ -1,0 +1,20 @@
+# golden_pattern.txt
+# One hexadecimal pixel value per line (lines starting with '#' are ignored).
+# The value is masked to the active data-format width (RAW8/10/12) at run time.
+# Used when pattern_sel = 5.
+000
+001
+002
+003
+0AA
+055
+0FF
+100
+155
+1AA
+1FF
+200
+2AA
+355
+3FF
+0C3
