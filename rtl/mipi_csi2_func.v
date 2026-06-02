@@ -1,5 +1,5 @@
 //============================================================================
-//  mipi_csi2_func.vh
+//  mipi_csi2_func.v   (include file -- not a standalone module)
 //----------------------------------------------------------------------------
 //  MIPI CSI-2 packet helper functions : ECC (packet header) and CRC-16
 //  (long-packet payload).  `included inside a module body.

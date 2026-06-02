@@ -21,8 +21,8 @@ mipi_tx_dphy_model/
 ├── rtl/
 │   ├── mipi_tx_dphy_model.v   # Tx D-PHY 頂層模型（主檔）
 │   ├── mipi_rx_checker.v      # Rx 平行輸出比對器
-│   ├── golden_pixel.vh        # golden pattern 產生 / 載入（Tx、checker 共用）
-│   └── mipi_csi2_func.vh      # CSI-2 ECC / CRC-16 函式
+│   ├── golden_pixel.v         # golden pattern 產生 / 載入（include 檔，非獨立 module）
+│   └── mipi_csi2_func.v       # CSI-2 ECC / CRC-16 函式（include 檔，非獨立 module）
 ├── sim/
 │   ├── tb_mipi_tx_dphy.v      # 自我比對 testbench
 │   ├── mipi_rx_dphy_stub.v    # 示範用 Rx 解碼模型（替換成真正 M31 模型）
@@ -32,6 +32,12 @@ mipi_tx_dphy_model/
     ├── USER_GUIDE.md          # 本文件
     └── REVISION_HISTORY.md    # 改版資訊
 ```
+
+> **編譯注意**：`golden_pixel.v` 與 `mipi_csi2_func.v` 是 **include 檔**
+> （內含 `function`/`task`，被 `` `include `` 進其他 module，本身不是獨立
+> module）。請**不要**把它們當頂層原始檔編譯，只要用 `-I rtl` 指定 include
+> 路徑即可（Makefile 已如此設定）。避免使用 `iverilog rtl/*.v` 這種 glob，
+> 否則會因 function 在 module 之外而報錯。
 
 ---
 

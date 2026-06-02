@@ -1,5 +1,5 @@
 //============================================================================
-//  golden_pixel.vh
+//  golden_pixel.v   (include file -- not a standalone module)
 //----------------------------------------------------------------------------
 //  Shared golden-pattern generator helpers.
 //

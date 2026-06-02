@@ -42,7 +42,7 @@ module mipi_rx_checker #(
     reg [11:0] gp_mem [0:GP_MAX-1];
     integer    gp_fcount;
 
-    `include "golden_pixel.vh"
+    `include "golden_pixel.v"
 
     reg [31:0] frame;
     reg [15:0] row, col;

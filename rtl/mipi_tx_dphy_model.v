@@ -115,8 +115,8 @@ module mipi_tx_dphy_model #(
     integer    lane_skew [0:3];
     reg        clk_hs_active;
 
-    `include "mipi_csi2_func.vh"
-    `include "golden_pixel.vh"
+    `include "mipi_csi2_func.v"
+    `include "golden_pixel.v"
 
     // ----- format helper --------------------------------------------------
     function integer dt_bits;

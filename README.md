@@ -27,8 +27,8 @@ make matrix     # 回歸：所有格式 × 所有 pattern
 |-------------------------------|-----------------------------------|
 | `rtl/mipi_tx_dphy_model.v`    | Tx D-PHY 頂層模型                  |
 | `rtl/mipi_rx_checker.v`       | Rx 平行輸出比對器                  |
-| `rtl/golden_pixel.vh`         | golden pattern 產生 / 載入         |
-| `rtl/mipi_csi2_func.vh`       | CSI-2 ECC / CRC                    |
+| `rtl/golden_pixel.v`          | golden pattern 產生 / 載入（include 檔）|
+| `rtl/mipi_csi2_func.v`        | CSI-2 ECC / CRC（include 檔）      |
 | `sim/tb_mipi_tx_dphy.v`       | 自我比對 testbench                 |
 | `sim/mipi_rx_dphy_stub.v`     | 示範用 Rx 模型（替換為真正 M31）   |
 | `golden_pattern.txt`          | 範例 golden pattern                |
