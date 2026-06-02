@@ -161,6 +161,15 @@ UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
 對齊需求：RAW10 / YUV10 的 sample 數需為 4 的倍數、RAW12 的 sample 數需為 2
 的倍數（即 RAW10 `Hsize%4==0`、RAW12 `Hsize%2==0`、YUV10 `Hsize%2==0`）。
 
+> **內建設定檢查**：模型會在每次觸發送資料前自動檢查設定，違規時印出明確
+> 訊息並停止模擬（`$finish`），避免產生錯誤資料：
+> - `data_type` 非支援值
+> - `Hsize`/`Vsize` 為 0、或超過 8K（超過僅警告）
+> - 上述 bit-packing 對齊不符
+> - `LANE_SPEED_MBPS` 超出 1..2500 範圍
+>
+> testbench 另在 elaboration 階段檢查 `YUV=1` 只能搭配 `FMT=8/10`。
+
 每張 frame 的傳送順序：
 
 ```

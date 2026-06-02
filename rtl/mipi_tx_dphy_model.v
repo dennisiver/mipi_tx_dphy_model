@@ -390,6 +390,42 @@ module mipi_tx_dphy_model #(
         end
     endtask
 
+    // ----- sanity-check the sampled configuration ------------------------
+    //  Stops the simulation with a clear message on an illegal setup so that
+    //  misconfiguration is caught instead of silently producing wrong data.
+    task check_config;
+        begin
+            // supported data type ?
+            case (cfg_dt)
+                DT_RAW8, DT_RAW10, DT_RAW12, DT_YUV8, DT_YUV10: ;
+                default: begin
+                    $display("[tx] CONFIG ERROR: unsupported data_type 0x%02h", cfg_dt);
+                    $display("[tx]   supported: 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x1E YUV422-8, 0x1F YUV422-10");
+                    $finish;
+                end
+            endcase
+            // non-zero frame
+            if (cfg_h == 0 || cfg_v == 0) begin
+                $display("[tx] CONFIG ERROR: Hsize/Vsize must be > 0 (got %0dx%0d)", cfg_h, cfg_v);
+                $finish;
+            end
+            // 8K bound
+            if (cfg_h > 7680 || cfg_v > 4320)
+                $display("[tx] CONFIG WARNING: %0dx%0d exceeds 8K (7680x4320)", cfg_h, cfg_v);
+            // bit-packing alignment (in samples/line: RAW = Hsize, YUV422 = 2*Hsize)
+            if (cfg_bits == 10 && (cfg_spl % 4 != 0)) begin
+                $display("[tx] CONFIG ERROR: 10-bit packing needs samples/line %% 4 == 0");
+                $display("[tx]   DT=0x%02h Hsize=%0d -> samples/line=%0d (need Hsize %% %0d == 0)",
+                         cfg_dt, cfg_h, cfg_spl, (dt_spp(cfg_dt) == 2) ? 2 : 4);
+                $finish;
+            end
+            if (cfg_bits == 12 && (cfg_spl % 2 != 0)) begin
+                $display("[tx] CONFIG ERROR: 12-bit packing needs samples/line %% 2 == 0 (Hsize=%0d)", cfg_h);
+                $finish;
+            end
+        end
+    endtask
+
     // ----- main control ---------------------------------------------------
     integer fi;
     initial begin
@@ -403,6 +439,10 @@ module mipi_tx_dphy_model #(
         lane_skew[3] = SKEW_L3_PS;
         gp_fcount   = 0;
         gp_load;
+        if (LANE_SPEED_MBPS <= 0 || LANE_SPEED_MBPS > 2500) begin
+            $display("[tx] CONFIG ERROR: LANE_SPEED_MBPS=%0d out of range (1..2500 Mbps)", LANE_SPEED_MBPS);
+            $finish;
+        end
         $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d (ps)",
                  LANE_SPEED_MBPS, UI_PS, T_LPX_PS, T_HS_PREP_PS, T_HS_ZERO_PS,
                  T_HS_TRAIL_PS, T_CLK_PREP_PS, T_CLK_ZERO_PS, T_CLK_TRAIL_PS);
@@ -430,6 +470,7 @@ module mipi_tx_dphy_model #(
             cfg_skew  = skew_cal_en;
             cfg_bits  = dt_bits(data_type);
             cfg_spl   = cfg_h * dt_spp(data_type);
+            check_config;                            // stop on illegal setup
             busy      = 1'b1;
             $display("[tx] %0t START  %0dMbps (UI=%0dps)  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
                      $time, LANE_SPEED_MBPS, UI_PS, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);

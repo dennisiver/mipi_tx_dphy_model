@@ -135,6 +135,18 @@ module tb_mipi_tx_dphy;
         .checking   ()
     );
 
+    // -------- elaboration-time configuration check ------------------------
+    initial begin
+        if (`YUV && (`FMT != 8) && (`FMT != 10)) begin
+            $display("[tb] CONFIG ERROR: YUV422 supports FMT=8 or FMT=10 only (got FMT=%0d)", `FMT);
+            $finish;
+        end
+        if ((`FMT != 8) && (`FMT != 10) && (`FMT != 12)) begin
+            $display("[tb] CONFIG ERROR: FMT must be 8, 10 or 12 (got %0d)", `FMT);
+            $finish;
+        end
+    end
+
     // -------------------------------------------------------- stimulus ----
     initial begin
         $dumpfile("tb_mipi_tx_dphy.vcd");

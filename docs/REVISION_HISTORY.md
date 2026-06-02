@@ -27,10 +27,13 @@
   golden pattern 與比對器自動沿用，比對以 sample 為單位。
 - Makefile / testbench 新增 `YUV`、`SPEED` 旋鈕；`make matrix` 擴充為
   RAW（18 種）+ YUV422（12 種）共 30 種組合，全數 PASS。
+- **設定檢查**：模型在送資料前檢查 data_type、Hsize/Vsize、bit-packing 對齊
+  與 `LANE_SPEED_MBPS` 範圍，違規即印出訊息並 `$finish`；testbench 於
+  elaboration 階段擋下 `YUV=1` 搭配非 8/10-bit 的誤用。
 
 ### 注意
 
-- YUV422 僅支援 8-bit / 10-bit；勿與 `FMT=12` 併用。
+- YUV422 僅支援 8-bit / 10-bit（已由檢查強制擋下與 `FMT=12` 併用）。
 
 ---
 
