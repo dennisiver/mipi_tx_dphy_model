@@ -5,7 +5,7 @@
 //  the M31 MIPI Rx D-PHY model.
 //
 //      * 4 data lanes + 1 clock lane, continuous-clock HS mode
-//      * up to 2.5 Gbps/lane   (UI programmable, default 400 ps)
+//      * up to 2.5 Gbps/lane
 //      * up to 8K frame size   (Hsize x Vsize programmable)
 //      * per-lane skew injection + deskew-calibration burst
 //      * RAW8 / RAW10 / RAW12 data formats (auto pixel bit-width)
@@ -17,27 +17,18 @@
 //      [1] : High-Speed data  (P = bit, N = ~bit; only meaningful when [0]=1)
 //      [0] : High-Speed valid (1 from HS-0 until return to LP, else 0)
 //
-//  This is a *simulation model*, not synthesizable RTL.  Protocol timing is
-//  abstracted through the T_*_PS parameters so that simulation stays fast;
-//  tune them to the exact M31 requirements if necessary.
+//  This is a *simulation model*, not synthesizable RTL.
+//
+//  TIMING: the user only sets LANE_SPEED_MBPS.  The unit interval (UI) and all
+//  D-PHY HS entry/exit intervals are derived automatically from the lane speed
+//  using the MIPI D-PHY spec relations (see localparams below), then rounded
+//  up to a whole UI so the data bit grid stays aligned to the DDR clock edges.
 //============================================================================
 `timescale 1ps/1ps
 
 module mipi_tx_dphy_model #(
-    // ---- line rate -------------------------------------------------------
-    parameter integer UI_PS          = 400,    // unit interval; 400ps = 2.5Gbps
-    // ---- abstracted D-PHY timing (picoseconds) ---------------------------
-    // NOTE: keep these as integer multiples of UI_PS so the data bit grid
-    //       stays aligned to the DDR clock edges (the model samples mid-eye).
-    parameter integer T_LPX_PS       = 4800,   // LP state period
-    parameter integer T_HS_PREP_PS   = 4000,   // data lane HS-prepare (LP-00)
-    parameter integer T_HS_ZERO_PS   = 4000,   // data lane HS-zero
-    parameter integer T_HS_TRAIL_PS  = 3200,   // data lane HS-trail
-    parameter integer T_CLK_PREP_PS  = 4000,   // clock lane HS-prepare
-    parameter integer T_CLK_ZERO_PS  = 6000,   // clock lane HS-zero
-    parameter integer T_CLK_TRAIL_PS = 3200,   // clock lane HS-trail
-    parameter integer T_CLK_PRE_PS   = 20000,  // clock running before 1st data burst
-    parameter integer T_FRAME_GAP_PS = 20000,  // idle after FE before clock exit
+    // ---- line rate (the ONE timing knob) ---------------------------------
+    parameter integer LANE_SPEED_MBPS = 2500,  // per-lane HS bit rate, <= 2500
     // ---- per-lane skew injection (picoseconds) ---------------------------
     parameter integer SKEW_L0_PS     = 0,
     parameter integer SKEW_L1_PS     = 0,
@@ -76,9 +67,46 @@ module mipi_tx_dphy_model #(
     output reg         frame_done
 );
 
+    //------------------------------------------------------------------------
+    //  Auto-derived timing.  Everything below is computed from LANE_SPEED_MBPS
+    //  using the MIPI D-PHY HS timing relations, then rounded UP to a whole UI
+    //  (>= spec minimum, and aligned to the DDR clock grid).  The user never
+    //  edits these.
+    //
+    //  UI(ps) = 1,000,000 / speed(Mbps)         e.g. 2500 -> 400 ps
+    //
+    //  Spec relations used (min values):
+    //    T-LPX            >= 50 ns
+    //    T-HS-PREPARE     >= 40 ns + 4*UI
+    //    T-HS-PREPARE + T-HS-ZERO  >= 145 ns + 10*UI
+    //    T-HS-TRAIL       >= max(8*UI, 60 ns + 4*UI)
+    //    T-CLK-PREPARE    >= 38 ns
+    //    T-CLK-PREPARE + T-CLK-ZERO >= 300 ns
+    //    T-CLK-TRAIL      >= 60 ns
+    //    T-CLK-PRE        >= 8*UI   (clock HS before first data HS)
+    //    T-CLK-POST       >= 60 ns + 52*UI
+    //------------------------------------------------------------------------
+    localparam integer UI_PS = (LANE_SPEED_MBPS <= 0) ? 400 : (1000000 / LANE_SPEED_MBPS);
+
+    // ceil-to-UI helper expressed inline: CEILUI(x) = ((x)+UI-1)/UI*UI
+    localparam integer T_LPX_PS      = ((  50000             + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_HS_PREP_PS  = ((  40000 +  4*UI_PS  + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_HS_ZERO_PS  = (( 145000 + 10*UI_PS - T_HS_PREP_PS + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_HS_TRL_A    = ((  60000 +  4*UI_PS  + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_HS_TRAIL_PS = (T_HS_TRL_A > 8*UI_PS) ? T_HS_TRL_A : (8*UI_PS);
+    localparam integer T_CLK_PREP_PS = ((  38000             + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_CLK_ZERO_PS = (( 300000 - T_CLK_PREP_PS + UI_PS-1)/UI_PS)*UI_PS;
+    localparam integer T_CLK_TRAIL_PS= ((  60000             + UI_PS-1)/UI_PS)*UI_PS;
+    // clock must already be in HS before the first data burst:
+    localparam integer T_CLK_PRE_PS  = 2*T_LPX_PS + T_CLK_PREP_PS + T_CLK_ZERO_PS + 8*UI_PS;
+    // keep the clock running past the last data (T-CLK-POST):
+    localparam integer T_FRAME_GAP_PS= ((  60000 + 52*UI_PS  + UI_PS-1)/UI_PS)*UI_PS;
+
     // CSI-2 data types
     localparam [7:0] DT_FS    = 8'h00;
     localparam [7:0] DT_FE    = 8'h01;
+    localparam [7:0] DT_YUV8  = 8'h1E;   // YUV422 8-bit
+    localparam [7:0] DT_YUV10 = 8'h1F;   // YUV422 10-bit
     localparam [7:0] DT_RAW8  = 8'h2A;
     localparam [7:0] DT_RAW10 = 8'h2B;
     localparam [7:0] DT_RAW12 = 8'h2C;
@@ -111,22 +139,38 @@ module mipi_tx_dphy_model #(
     reg [11:0] cfg_solid;
     reg        cfg_skew;
     integer    cfg_bits;
+    integer    cfg_spl;          // samples per line (= hsize * samples-per-pixel)
 
     integer    lane_skew [0:3];
     reg        clk_hs_active;
 
-    `include "mipi_csi2_func.vh"
-    `include "golden_pixel.vh"
+    `include "mipi_csi2_func.v"
+    `include "golden_pixel.v"
 
-    // ----- format helper --------------------------------------------------
+    // ----- format helpers -------------------------------------------------
+    //  dt_bits : sample bit-width.  dt_spp : samples per pixel.
+    //  YUV422 carries 2 samples/pixel (Cb,Y0,Cr,Y1 -> 2 components per pixel),
+    //  packed exactly like RAW of the same bit-width.  RAW carries 1/pixel.
     function integer dt_bits;
         input [7:0] dt;
         begin
             case (dt)
+                DT_YUV8 : dt_bits = 8;
+                DT_YUV10: dt_bits = 10;
                 DT_RAW8 : dt_bits = 8;
                 DT_RAW10: dt_bits = 10;
                 DT_RAW12: dt_bits = 12;
                 default : dt_bits = 8;
+            endcase
+        end
+    endfunction
+
+    function integer dt_spp;
+        input [7:0] dt;
+        begin
+            case (dt)
+                DT_YUV8, DT_YUV10: dt_spp = 2;
+                default          : dt_spp = 1;
             endcase
         end
     endfunction
@@ -272,13 +316,15 @@ module mipi_tx_dphy_model #(
         reg [7:0]  di;
         begin
             b = 4;                                   // payload starts after PH
+            // cfg_spl = samples per line (RAW: = hsize; YUV422: = 2*hsize).
+            // Packing is selected by the sample bit-width (8/10/12).
             if (cfg_bits == 8) begin
-                for (c = 0; c < cfg_h; c = c + 1) begin
+                for (c = 0; c < cfg_spl; c = c + 1) begin
                     p0 = golden_pixel(frame,row,c[15:0],cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b] = p0[7:0]; b = b + 1;
                 end
             end else if (cfg_bits == 10) begin
-                for (c = 0; c < cfg_h; c = c + 4) begin
+                for (c = 0; c < cfg_spl; c = c + 4) begin
                     p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p2 = golden_pixel(frame,row,(c+2)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
@@ -291,7 +337,7 @@ module mipi_tx_dphy_model #(
                     b = b + 5;
                 end
             end else begin // 12-bit
-                for (c = 0; c < cfg_h; c = c + 2) begin
+                for (c = 0; c < cfg_spl; c = c + 2) begin
                     p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b  ] = p0[11:4];
@@ -344,6 +390,42 @@ module mipi_tx_dphy_model #(
         end
     endtask
 
+    // ----- sanity-check the sampled configuration ------------------------
+    //  Stops the simulation with a clear message on an illegal setup so that
+    //  misconfiguration is caught instead of silently producing wrong data.
+    task check_config;
+        begin
+            // supported data type ?
+            case (cfg_dt)
+                DT_RAW8, DT_RAW10, DT_RAW12, DT_YUV8, DT_YUV10: ;
+                default: begin
+                    $display("[tx] CONFIG ERROR: unsupported data_type 0x%02h", cfg_dt);
+                    $display("[tx]   supported: 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x1E YUV422-8, 0x1F YUV422-10");
+                    $finish;
+                end
+            endcase
+            // non-zero frame
+            if (cfg_h == 0 || cfg_v == 0) begin
+                $display("[tx] CONFIG ERROR: Hsize/Vsize must be > 0 (got %0dx%0d)", cfg_h, cfg_v);
+                $finish;
+            end
+            // 8K bound
+            if (cfg_h > 7680 || cfg_v > 4320)
+                $display("[tx] CONFIG WARNING: %0dx%0d exceeds 8K (7680x4320)", cfg_h, cfg_v);
+            // bit-packing alignment (in samples/line: RAW = Hsize, YUV422 = 2*Hsize)
+            if (cfg_bits == 10 && (cfg_spl % 4 != 0)) begin
+                $display("[tx] CONFIG ERROR: 10-bit packing needs samples/line %% 4 == 0");
+                $display("[tx]   DT=0x%02h Hsize=%0d -> samples/line=%0d (need Hsize %% %0d == 0)",
+                         cfg_dt, cfg_h, cfg_spl, (dt_spp(cfg_dt) == 2) ? 2 : 4);
+                $finish;
+            end
+            if (cfg_bits == 12 && (cfg_spl % 2 != 0)) begin
+                $display("[tx] CONFIG ERROR: 12-bit packing needs samples/line %% 2 == 0 (Hsize=%0d)", cfg_h);
+                $finish;
+            end
+        end
+    endtask
+
     // ----- main control ---------------------------------------------------
     integer fi;
     initial begin
@@ -357,6 +439,13 @@ module mipi_tx_dphy_model #(
         lane_skew[3] = SKEW_L3_PS;
         gp_fcount   = 0;
         gp_load;
+        if (LANE_SPEED_MBPS <= 0 || LANE_SPEED_MBPS > 2500) begin
+            $display("[tx] CONFIG ERROR: LANE_SPEED_MBPS=%0d out of range (1..2500 Mbps)", LANE_SPEED_MBPS);
+            $finish;
+        end
+        $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d (ps)",
+                 LANE_SPEED_MBPS, UI_PS, T_LPX_PS, T_HS_PREP_PS, T_HS_ZERO_PS,
+                 T_HS_TRAIL_PS, T_CLK_PREP_PS, T_CLK_ZERO_PS, T_CLK_TRAIL_PS);
     end
 
     always @(negedge rst_n) begin
@@ -380,9 +469,11 @@ module mipi_tx_dphy_model #(
             cfg_nf    = (num_frames == 0) ? 16'd1 : num_frames;
             cfg_skew  = skew_cal_en;
             cfg_bits  = dt_bits(data_type);
+            cfg_spl   = cfg_h * dt_spp(data_type);
+            check_config;                            // stop on illegal setup
             busy      = 1'b1;
-            $display("[tx] %0t START  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
-                     $time, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+            $display("[tx] %0t START  %0dMbps (UI=%0dps)  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                     $time, LANE_SPEED_MBPS, UI_PS, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
             for (fi = 0; fi < cfg_nf; fi = fi + 1) begin
                 send_frame(fi[31:0]);
                 frame_done = 1'b1; #(1); frame_done = 1'b0;
