@@ -2,7 +2,35 @@
 
 | 版本   | 日期       | 說明 |
 |--------|------------|------|
+| v1.1.0 | 2026-06-02 | 時序由 lane speed 自動推算；新增 YUV422 8/10-bit。 |
 | v1.0.0 | 2026-06-02 | 首次釋出。 |
+
+---
+
+## v1.1.0 (2026-06-02)
+
+### 變更
+
+- **時序自動計算**：移除手動的 `UI_PS` / `T_*_PS` 參數，改為單一旋鈕
+  `LANE_SPEED_MBPS`。UI 與所有 D-PHY HS 進出時序（T-LPX、T-HS-PREPARE、
+  T-HS-ZERO、T-HS-TRAIL、T-CLK-PREPARE、T-CLK-ZERO、T-CLK-TRAIL、
+  T-CLK-PRE、T-CLK-POST）依 MIPI D-PHY spec 關係式自動推算最小合規值，
+  並向上取整成整數個 UI（對齊 DDR clock 格點）。模型啟動時會印出實際時序。
+- testbench / Rx stub 同步改用 `LANE_SPEED_MBPS`（`SPEED` define），
+  Rx 取樣與 Pxclk 週期也由 lane speed 推算。
+
+### 新增
+
+- **YUV422 8-bit（DT 0x1E）與 YUV422 10-bit（DT 0x1F）**。YUV422 每 pixel
+  帶 2 個 component（Cb,Y0,Cr,Y1 → 2 samples/pixel），每行 sample 數 =
+  `2*Hsize`，packing 與相同位元數的 RAW 一致（YUV8↔RAW8、YUV10↔RAW10）。
+  golden pattern 與比對器自動沿用，比對以 sample 為單位。
+- Makefile / testbench 新增 `YUV`、`SPEED` 旋鈕；`make matrix` 擴充為
+  RAW（18 種）+ YUV422（12 種）共 30 種組合，全數 PASS。
+
+### 注意
+
+- YUV422 僅支援 8-bit / 10-bit；勿與 `FMT=12` 併用。
 
 ---
 

@@ -14,9 +14,8 @@
 `timescale 1ps/1ps
 
 module mipi_rx_dphy_stub #(
-    parameter integer UI_PS      = 400,
+    parameter integer LANE_SPEED_MBPS = 2500, // must match the Tx lane speed
     parameter integer DATA_BITS  = 10,     // 8/10/12 -> RAW8/RAW10/RAW12
-    parameter integer PXCLK_HALF = 300,    // half period of generated Pxclk
     parameter integer MAXQ       = 16384,  // output FIFO depth (>= one line)
     parameter integer MAXBPL     = 8192    // max bytes per lane per burst
 )(
@@ -32,6 +31,10 @@ module mipi_rx_dphy_stub #(
     output reg        Stb,
     output reg [11:0] Data
 );
+
+    // derived unit interval (matches the Tx) and generated pixel-clock period
+    localparam integer UI_PS      = (LANE_SPEED_MBPS <= 0) ? 400 : (1000000 / LANE_SPEED_MBPS);
+    localparam integer PXCLK_HALF = UI_PS;        // 1 pixel every 2 UI (drains fast)
 
     // ---- recovered clock / per-lane HS view ------------------------------
     wire clk_hs  = PAD_CDRX_L4P[1];

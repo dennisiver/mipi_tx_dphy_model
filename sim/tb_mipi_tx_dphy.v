@@ -33,13 +33,21 @@
 `ifndef SKEW
  `define SKEW 0          // 1 = enable deskew calibration + lane skew injection
 `endif
+`ifndef SPEED
+ `define SPEED 2500      // per-lane HS bit rate in Mbps (timing auto-derived)
+`endif
+`ifndef YUV
+ `define YUV 0           // 0 = RAW (FMT 8/10/12), 1 = YUV422 (FMT 8/10)
+`endif
 
 module tb_mipi_tx_dphy;
 
-    localparam integer UI_PS = 400;     // 2.5 Gbps
+    localparam integer SPEED = `SPEED;          // per-lane Mbps
+    localparam integer UI_PS = 1000000 / SPEED; // derived UI (for skew reference)
 
-    // data type from format
-    localparam [7:0] DT = (`FMT==8)  ? 8'h2A :
+    // data type from format.  YUV422: FMT must be 8 or 10.
+    localparam [7:0] DT = (`YUV) ? ((`FMT==10) ? 8'h1F : 8'h1E) :
+                          (`FMT==8)  ? 8'h2A :
                           (`FMT==12) ? 8'h2C : 8'h2B;
 
     // injected per-lane skew (only when SKEW=1); kept < UI/2 for the stub
@@ -70,7 +78,7 @@ module tb_mipi_tx_dphy;
 
     // ------------------------------------------------------------------ Tx
     mipi_tx_dphy_model #(
-        .UI_PS      (UI_PS),
+        .LANE_SPEED_MBPS (SPEED),
         .SKEW_L0_PS (SK0), .SKEW_L1_PS (SK1),
         .SKEW_L2_PS (SK2), .SKEW_L3_PS (SK3),
         .GP_FILE    ("golden_pattern.txt")
@@ -95,8 +103,8 @@ module tb_mipi_tx_dphy;
 
     // ------------------------------------------------- Rx (stub or M31) ---
     mipi_rx_dphy_stub #(
-        .UI_PS    (UI_PS),
-        .DATA_BITS(`FMT)
+        .LANE_SPEED_MBPS (SPEED),
+        .DATA_BITS       (`FMT)
     ) U_RX (
         .PAD_CDRX_L0P(L0P), .PAD_CDRX_L0N(L0N),
         .PAD_CDRX_L1P(L1P), .PAD_CDRX_L1N(L1N),
