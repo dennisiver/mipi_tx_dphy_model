@@ -329,20 +329,20 @@ module mipi_tx_dphy_model #(
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p2 = golden_pixel(frame,row,(c+2)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p3 = golden_pixel(frame,row,(c+3)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    pkt[b  ] = p0[9:2];
-                    pkt[b+1] = p1[9:2];
-                    pkt[b+2] = p2[9:2];
-                    pkt[b+3] = p3[9:2];
-                    pkt[b+4] = {p3[1:0], p2[1:0], p1[1:0], p0[1:0]};
+                    pkt[b  ] = p0[7:0];
+                    pkt[b+1] = p1[7:0];
+                    pkt[b+2] = p2[7:0];
+                    pkt[b+3] = p3[7:0];
+                    pkt[b+4] = {p3[9:8], p2[9:8], p1[9:8], p0[9:8]};
                     b = b + 5;
                 end
             end else begin // 12-bit
                 for (c = 0; c < cfg_spl; c = c + 2) begin
                     p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    pkt[b  ] = p0[11:4];
-                    pkt[b+1] = p1[11:4];
-                    pkt[b+2] = {p1[3:0], p0[3:0]};
+                    pkt[b  ] = p0[7:0];
+                    pkt[b+1] = p1[7:0];
+                    pkt[b+2] = {p1[11:8], p0[11:8]};
                     b = b + 3;
                 end
             end
@@ -394,6 +394,7 @@ module mipi_tx_dphy_model #(
     //  Stops the simulation with a clear message on an illegal setup so that
     //  misconfiguration is caught instead of silently producing wrong data.
     task check_config;
+        integer line_bytes;
         begin
             // supported data type ?
             case (cfg_dt)
@@ -410,8 +411,10 @@ module mipi_tx_dphy_model #(
                 $finish;
             end
             // 8K bound
-            if (cfg_h > 7680 || cfg_v > 4320)
-                $display("[tx] CONFIG WARNING: %0dx%0d exceeds 8K (7680x4320)", cfg_h, cfg_v);
+            if (cfg_h > 7680 || cfg_v > 4320) begin
+                $display("[tx] CONFIG ERROR: %0dx%0d exceeds supported 8K limit (7680x4320)", cfg_h, cfg_v);
+                $finish;
+            end
             // bit-packing alignment (in samples/line: RAW = Hsize, YUV422 = 2*Hsize)
             if (cfg_bits == 10 && (cfg_spl % 4 != 0)) begin
                 $display("[tx] CONFIG ERROR: 10-bit packing needs samples/line %% 4 == 0");
@@ -421,6 +424,16 @@ module mipi_tx_dphy_model #(
             end
             if (cfg_bits == 12 && (cfg_spl % 2 != 0)) begin
                 $display("[tx] CONFIG ERROR: 12-bit packing needs samples/line %% 2 == 0 (Hsize=%0d)", cfg_h);
+                $finish;
+            end
+            if (cfg_bits == 8)
+                line_bytes = cfg_spl;
+            else if (cfg_bits == 10)
+                line_bytes = (cfg_spl / 4) * 5;
+            else
+                line_bytes = (cfg_spl / 2) * 3;
+            if (line_bytes + 6 > MAXB) begin
+                $display("[tx] CONFIG ERROR: line packet needs %0d bytes, exceeds MAXB=%0d", line_bytes + 6, MAXB);
                 $finish;
             end
         end

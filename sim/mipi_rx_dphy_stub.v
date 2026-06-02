@@ -111,6 +111,10 @@ module mipi_rx_dphy_stub #(
     task push_evt;
         input v; input h; input s; input [11:0] d;
         begin
+            if ((wptr - rptr) >= MAXQ) begin
+                $display("[rx_stub] ERROR: output FIFO overflow (MAXQ=%0d)", MAXQ);
+                $fatal(1);
+            end
             q_mem[wptr % MAXQ] = {v, h, s, d};
             wptr = wptr + 1;
         end
@@ -152,18 +156,18 @@ module mipi_rx_dphy_stub #(
                             b0 = mbyte(base); b1 = mbyte(base+1);
                             b2 = mbyte(base+2); b3 = mbyte(base+3);
                             lsb = mbyte(base+4);
-                            push_evt(1'b0,1'b0,1'b1, {2'h0, b0, lsb[1:0]});
-                            push_evt(1'b0,1'b0,1'b1, {2'h0, b1, lsb[3:2]});
-                            push_evt(1'b0,1'b0,1'b1, {2'h0, b2, lsb[5:4]});
-                            push_evt(1'b0,1'b0,1'b1, {2'h0, b3, lsb[7:6]});
+                            push_evt(1'b0,1'b0,1'b1, {2'h0, lsb[1:0], b0});
+                            push_evt(1'b0,1'b0,1'b1, {2'h0, lsb[3:2], b1});
+                            push_evt(1'b0,1'b0,1'b1, {2'h0, lsb[5:4], b2});
+                            push_evt(1'b0,1'b0,1'b1, {2'h0, lsb[7:6], b3});
                         end
                     end else begin // 12-bit
                         np = wc / 3;
                         for (g = 0; g < np; g = g + 1) begin
                             base = 4 + g*3;
                             b0 = mbyte(base); b1 = mbyte(base+1); b2 = mbyte(base+2);
-                            push_evt(1'b0,1'b0,1'b1, {b0, b2[3:0]});
-                            push_evt(1'b0,1'b0,1'b1, {b1, b2[7:4]});
+                            push_evt(1'b0,1'b0,1'b1, {b2[3:0], b0});
+                            push_evt(1'b0,1'b0,1'b1, {b2[7:4], b1});
                         end
                     end
                 end

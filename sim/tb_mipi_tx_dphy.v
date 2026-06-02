@@ -43,7 +43,10 @@
 module tb_mipi_tx_dphy;
 
     localparam integer SPEED = `SPEED;          // per-lane Mbps
-    localparam integer UI_PS = 1000000 / SPEED; // derived UI (for skew reference)
+    localparam integer UI_PS = (SPEED <= 0) ? 400 : (1000000 / SPEED); // derived UI (for skew reference)
+    localparam integer EXP_SAMPLES_PER_LINE = (`YUV) ? (2 * `HS) : `HS;
+    localparam integer EXP_FRAMES = (`NF == 0) ? 1 : `NF;
+    localparam integer EXP_PIXELS = EXP_SAMPLES_PER_LINE * `VS * EXP_FRAMES;
 
     // data type from format.  YUV422: FMT must be 8 or 10.
     localparam [7:0] DT = (`YUV) ? ((`FMT==10) ? 8'h1F : 8'h1E) :
@@ -137,13 +140,17 @@ module tb_mipi_tx_dphy;
 
     // -------- elaboration-time configuration check ------------------------
     initial begin
+        if ((SPEED <= 0) || (SPEED > 2500)) begin
+            $display("[tb] CONFIG ERROR: SPEED must be in range 1..2500 Mbps (got %0d)", SPEED);
+            $fatal(1);
+        end
         if (`YUV && (`FMT != 8) && (`FMT != 10)) begin
             $display("[tb] CONFIG ERROR: YUV422 supports FMT=8 or FMT=10 only (got FMT=%0d)", `FMT);
-            $finish;
+            $fatal(1);
         end
         if ((`FMT != 8) && (`FMT != 10) && (`FMT != 12)) begin
             $display("[tb] CONFIG ERROR: FMT must be 8, 10 or 12 (got %0d)", `FMT);
-            $finish;
+            $fatal(1);
         end
     end
 
@@ -177,7 +184,16 @@ module tb_mipi_tx_dphy;
         U_CHK.report;
         if (U_CHK.pixel_count == 0) begin
             $display("[tb] ERROR: no pixels were checked");
-            $finish;
+            $fatal(1);
+        end
+        if (U_CHK.pixel_count != EXP_PIXELS) begin
+            $display("[tb] ERROR: checked %0d pixels/samples, expected %0d",
+                     U_CHK.pixel_count, EXP_PIXELS);
+            $fatal(1);
+        end
+        if (U_CHK.error_count != 0) begin
+            $display("[tb] ERROR: checker reported %0d mismatch(es)", U_CHK.error_count);
+            $fatal(1);
         end
         $finish;
     end

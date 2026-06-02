@@ -164,7 +164,7 @@ UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
 > **內建設定檢查**：模型會在每次觸發送資料前自動檢查設定，違規時印出明確
 > 訊息並停止模擬（`$finish`），避免產生錯誤資料：
 > - `data_type` 非支援值
-> - `Hsize`/`Vsize` 為 0、或超過 8K（超過僅警告）
+> - `Hsize`/`Vsize` 為 0、或超過 8K
 > - 上述 bit-packing 對齊不符
 > - `LANE_SPEED_MBPS` 超出 1..2500 範圍
 >
@@ -208,11 +208,101 @@ Frame End    (short packet, DT=0x01)
 | 4           | solid             | 固定值 `solid_val`                     |
 | 5           | from file         | 由 `golden_pattern.txt` 載入           |
 
+### 5.1 相關 Port / Parameter
+
+Golden pattern 由 Tx 的 runtime port 與 instance parameter 一起控制：
+
+| 名稱          | 類型      | 預設 / 範圍          | 說明 |
+|---------------|-----------|----------------------|------|
+| `pattern_sel` | input port | `0..5`               | 選擇要送出的 pattern。testbench 用 Makefile 參數 `PAT` 指定。 |
+| `solid_val`   | input port | 12-bit value         | `pattern_sel=4` 時送出的固定值；會依 RAW/YUV 位元數自動 mask。 |
+| `GP_FILE`     | parameter | `"golden_pattern.txt"` | `pattern_sel=5` 時讀取的外部 pattern 檔案路徑。 |
+| `GP_MAX`      | parameter | `65536`              | 最多從 `GP_FILE` 載入的 sample 數。 |
+
+`pattern_sel` 與 `solid_val` 是 runtime configuration，在每次 trigger 開始送 frame sequence
+時被 Tx sample；也就是 transmission 進行中改變這兩個 port，不會影響已經開始的那一輪傳輸。
+`GP_FILE` 與 `GP_MAX` 是 elaboration-time parameter，需要在 instantiate Tx / checker 時指定。
+
+checker 端也要使用相同設定：
+
+```verilog
+mipi_rx_checker #(
+    .BITS    (10),
+    .PATTERN (pattern_sel_used_by_tx),
+    .SOLID   (solid_val_used_by_tx),
+    .GP_FILE ("golden_pattern.txt")
+) u_chk (...);
+```
+
+目前 testbench 中 `SOLID` 固定為 `12'h3AA`，Tx 的 `solid_val` 也設為同一個值。
+
+### 5.2 使用範例
+
+使用內建 ramp pattern：
+
+```bash
+cd sim
+make FMT=10 PAT=0
+```
+
+使用 checkerboard pattern：
+
+```bash
+make FMT=12 PAT=3
+```
+
+使用 solid pattern。testbench 預設固定值為 `12'h3AA`：
+
+```bash
+make FMT=10 PAT=4
+```
+
+若要改 solid value，請在自己的 testbench 中設定 Tx 的 `solid_val`，並同步設定
+checker 的 `SOLID`：
+
+```verilog
+localparam [11:0] SOLID_PATTERN = 12'h155;
+
+mipi_tx_dphy_model u_tx (
+    .pattern_sel(3'd4),
+    .solid_val  (SOLID_PATTERN),
+    // other ports...
+);
+
+mipi_rx_checker #(
+    .BITS (10),
+    .PATTERN(4),
+    .SOLID(SOLID_PATTERN)
+) u_chk (...);
+```
+
+使用外部 golden pattern 檔：
+
+```bash
+make FMT=10 PAT=5
+```
+
+若檔案不在 repo root，請在 Tx 與 checker 使用相同的 `GP_FILE`：
+
+```verilog
+mipi_tx_dphy_model #(
+    .GP_FILE("../patterns/my_golden_pattern.txt"),
+    .GP_MAX (131072)
+) u_tx (...);
+
+mipi_rx_checker #(
+    .GP_FILE("../patterns/my_golden_pattern.txt"),
+    .GP_MAX (131072)
+) u_chk (...);
+```
+
 ### golden_pattern.txt 格式
 
 - 每行一個 **十六進位** 值（`#` 開頭為註解、空白行會被略過）
 - 讀入後依資料格式自動遮罩到對應位元數
-- 像素索引 `row*hsize + col`，超出檔案長度時循環取用
+- sample 索引依 `golden_pixel(frame,row,col,hsize,...)` 計算為 `row*hsize + col`；
+  YUV422 時 `col` 會跑遍 `2*Hsize`，因此 file pattern 會以 sample/component 為單位被取用
+- 超出檔案長度時會循環取用，也就是 `index % loaded_count`
 
 範例：
 
@@ -227,12 +317,106 @@ Frame End    (short packet, DT=0x01)
 
 ## 6. Skew Calibration
 
-1. **Per-lane skew 注入**：用 `SKEW_Lx_PS` 對各條 data lane 注入不同延遲，
-   模擬實際走線造成的 lane 間 skew。
-2. **Deskew calibration burst**：`skew_cal_en = 1` 時，每張 frame 前會送出
-   一段（前導 0 + 連續 0101…）的校正樣式，供 M31 Rx 做 per-lane deskew。
+本 model 提供兩個互相搭配的功能：
 
-`SKEW_PREAMBLE`、`SKEW_CAL_BITS` 可調整校正樣式長度。
+1. **Per-lane skew injection**：在 Tx 端故意讓每條 data lane 的 HS burst 起跑時間
+   加上不同延遲，模擬 PCB routing、封裝或 PHY 造成的 lane-to-lane skew。
+2. **Deskew calibration burst**：在正式 CSI-2 frame packet 前送出一段校正用 HS pattern，
+   供 Rx D-PHY 做 lane deskew / alignment。
+
+### 6.1 Per-Lane Skew Injection
+
+每條 data lane 可用獨立參數設定延遲量，單位是 ps：
+
+```verilog
+parameter integer SKEW_L0_PS = 0,
+parameter integer SKEW_L1_PS = 0,
+parameter integer SKEW_L2_PS = 0,
+parameter integer SKEW_L3_PS = 0,
+```
+
+這些延遲只套用在 data lane 的 HS burst 開始前，不會改變 payload 內容。概念上：
+
+```text
+lane0: |HS burst starts here|
+lane1:      |HS burst starts here|   + SKEW_L1_PS
+lane2:           |HS burst starts here| + SKEW_L2_PS
+lane3:                |HS burst starts here| + SKEW_L3_PS
+```
+
+testbench 中 `make SKEW=1` 會使用下列示範值：
+
+```verilog
+SKEW_L0_PS = 0
+SKEW_L1_PS = 40
+SKEW_L2_PS = 90
+SKEW_L3_PS = 150
+```
+
+這些值刻意保持小於 `UI/2`，方便示範用 `mipi_rx_dphy_stub` 正確取樣。接真正
+M31 Rx model 時，可依 M31 spec 與欲驗證的 skew margin 調整。
+
+### 6.2 Deskew Calibration Burst
+
+`skew_cal_en = 1` 時，每張 frame 前會先送 deskew calibration burst，再送 CSI-2
+Frame Start / line packets / Frame End：
+
+```text
+clock lane 進入 HS continuous clock
+[deskew calibration burst]  <-- skew_cal_en=1 時送出
+Frame Start short packet
+line 0 long packet
+line 1 long packet
+...
+Frame End short packet
+```
+
+calibration burst 的 pattern 由兩個參數控制：
+
+| 參數             | 預設 | 說明                                      |
+|------------------|------|-------------------------------------------|
+| `SKEW_PREAMBLE`  | 32   | burst 開頭連續送出的 0 bit 數              |
+| `SKEW_CAL_BITS`  | 256  | preamble 後連續送出的 `0101...` toggle bit 數 |
+
+實際送出的 bit 序列概念如下：
+
+```text
+000000...0000 010101010101...
+^ preamble    ^ calibration toggle pattern
+```
+
+Tx 會在 4 條 data lane 同時送出這段 calibration burst，但每條 lane 仍會套用
+`SKEW_Lx_PS`。因此 Rx 可以利用這段固定且容易偵測的 pattern 估計各 lane 相對時間差，
+再對後續 CSI-2 packet 做 deskew。
+
+### 6.3 使用範例
+
+使用 Makefile 開啟 skew injection 與 calibration burst：
+
+```bash
+cd sim
+make SKEW=1
+```
+
+若要在自己的 testbench 直接設定 Tx instance，可寫成：
+
+```verilog
+mipi_tx_dphy_model #(
+    .LANE_SPEED_MBPS(2500),
+    .SKEW_L0_PS(0),
+    .SKEW_L1_PS(40),
+    .SKEW_L2_PS(90),
+    .SKEW_L3_PS(150),
+    .SKEW_PREAMBLE(32),
+    .SKEW_CAL_BITS(256)
+) u_tx (
+    .skew_cal_en(1'b1),
+    // other ports...
+);
+```
+
+若只想注入 skew、但不送 calibration burst，可設定 `SKEW_Lx_PS` 非 0，
+並讓 `skew_cal_en = 1'b0`。這種情境可用來觀察 Rx 在沒有 deskew training 時的容忍度。
 
 ---
 
