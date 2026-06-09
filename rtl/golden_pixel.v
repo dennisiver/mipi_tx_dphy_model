@@ -8,14 +8,14 @@
 //
 //      localparam integer GP_MAX  = <max number of values from file>;
 //      localparam         GP_FILE = "<path to golden_pattern.txt>";
-//      reg  [11:0] gp_mem [0:GP_MAX-1];   // storage for file pattern
+//      reg  [13:0] gp_mem [0:GP_MAX-1];   // storage for file pattern
 //      integer     gp_fcount;            // number of values actually loaded
 //
 //  The including module should call task gp_load() once (typically in an
 //  initial block) so that the file-based pattern (PATTERN==5) is available.
 //
 //  Pixel value bit-width is selected automatically from the data format by
-//  passing the "bits" argument (8/10/12 for RAW8/RAW10/RAW12).
+//  passing the "bits" argument (8/10/12/14 for RAW8/RAW10/RAW12/RAW14).
 //============================================================================
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ task gp_load;
             while (!$feof(fd) && (n < GP_MAX)) begin
                 r = $fscanf(fd, "%h", v);          // one hex value per line
                 if (r == 1) begin
-                    gp_mem[n] = v[11:0];
+                    gp_mem[n] = v[13:0];
                     n = n + 1;
                 end else begin
                     r = $fgets(dump, fd);          // skip comment / blank line
@@ -53,11 +53,11 @@ endtask
 // ---------------------------------------------------------------------------
 //  gp_mask : data-format dependent value mask
 // ---------------------------------------------------------------------------
-function [11:0] gp_mask;
+function [13:0] gp_mask;
     input integer bits;
     begin
-        if (bits >= 12)      gp_mask = 12'hFFF;
-        else if (bits <= 0)  gp_mask = 12'h000;
+        if (bits >= 14)      gp_mask = 14'h3FFF;
+        else if (bits <= 0)  gp_mask = 14'h0000;
         else                 gp_mask = (1 << bits) - 1;
     end
 endfunction
@@ -72,16 +72,16 @@ endfunction
 //            4 = solid colour        (constant = solid)
 //            5 = from golden_pattern.txt
 // ---------------------------------------------------------------------------
-function [11:0] golden_pixel;
+function [13:0] golden_pixel;
     input [31:0] frame;
-    input [15:0] row;
-    input [15:0] col;
+    input [31:0] row;
+    input [31:0] col;
     input [15:0] hsize;
     input integer pattern;
     input integer bits;
     input integer solid;
-    reg  [11:0] mask;
-    reg  [31:0] lin;
+    reg  [13:0] mask;
+    reg  [63:0] lin;
     integer     idx;
     begin
         mask = gp_mask(bits);
@@ -89,7 +89,7 @@ function [11:0] golden_pixel;
             0: golden_pixel = (row*hsize + col + frame) & mask;
             1: golden_pixel = col & mask;
             2: golden_pixel = row & mask;
-            3: golden_pixel = ((((col>>3) + (row>>3)) & 1) != 0) ? mask : 12'h0;
+            3: golden_pixel = ((((col>>3) + (row>>3)) & 1) != 0) ? mask : 14'h0;
             4: golden_pixel = solid & mask;
             5: begin
                    lin = row*hsize + col;
@@ -97,7 +97,7 @@ function [11:0] golden_pixel;
                        idx = lin % gp_fcount;
                        golden_pixel = gp_mem[idx] & mask;
                    end else begin
-                       golden_pixel = 12'h0;
+                       golden_pixel = 14'h0;
                    end
                end
             default: golden_pixel = (row*hsize + col + frame) & mask;

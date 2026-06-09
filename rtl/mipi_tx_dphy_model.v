@@ -4,11 +4,11 @@
 //  Behavioural MIPI D-PHY transmitter model (CSI-2 framing) intended to drive
 //  the M31 MIPI Rx D-PHY model.
 //
-//      * 4 data lanes + 1 clock lane, continuous-clock HS mode
+//      * 1 / 2 / 4 active data lanes + 1 clock lane, continuous-clock HS mode
 //      * up to 2.5 Gbps/lane
 //      * up to 8K frame size   (Hsize x Vsize programmable)
 //      * per-lane skew injection + deskew-calibration burst
-//      * RAW8 / RAW10 / RAW12 data formats (auto pixel bit-width)
+//      * RAW8 / RAW10 / RAW12 / RAW14 data formats (auto pixel bit-width)
 //      * built-in golden patterns + golden_pattern.txt loader
 //      * input trigger gates the start of transmission
 //
@@ -29,6 +29,15 @@
 module mipi_tx_dphy_model #(
     // ---- line rate (the ONE timing knob) ---------------------------------
     parameter integer LANE_SPEED_MBPS = 2500,  // per-lane HS bit rate, <= 2500
+    // ---- frame / packet configuration ------------------------------------
+    parameter integer LANE_NUM        = 4,      // active data lanes: 1, 2, or 4
+    parameter integer HSIZE           = 64,     // active pixels per line
+    parameter integer VSIZE           = 8,      // active lines per frame
+    parameter [7:0]   DATA_TYPE       = 8'h2B,  // 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x2D RAW14
+    parameter integer PATTERN_SEL     = 0,      // 0..5 (see golden_pixel.v)
+    parameter integer SOLID_VAL       = 14'h03AA,
+    parameter integer NUM_FRAMES      = 2,
+    parameter integer SKEW_CAL_EN     = 0,
     // ---- per-lane skew injection (picoseconds) ---------------------------
     parameter integer SKEW_L0_PS     = 0,
     parameter integer SKEW_L1_PS     = 0,
@@ -46,21 +55,12 @@ module mipi_tx_dphy_model #(
     input  wire        rst_n,        // active-low reset
     input  wire        trigger,      // start transmission on rising edge / level high
 
-    // runtime configuration (sampled when a frame sequence starts) ---------
-    input  wire [15:0] hsize,        // active pixels per line   (max 7680)
-    input  wire [15:0] vsize,        // active lines per frame   (max 4320)
-    input  wire [7:0]  data_type,    // CSI-2 DT: 0x2A=RAW8 0x2B=RAW10 0x2C=RAW12
-    input  wire [2:0]  pattern_sel,  // 0..5 (see golden_pixel.vh)
-    input  wire [11:0] solid_val,    // value for solid pattern
-    input  wire [15:0] num_frames,   // number of frames to send per trigger
-    input  wire        skew_cal_en,  // 1 = send deskew calibration burst/frame
-
     // pad interface to the M31 Rx D-PHY model (Tx drives) ------------------
-    output wire [2:0]  PAD_CDRX_L0P, output wire [2:0] PAD_CDRX_L0N,  // data lane 0
-    output wire [2:0]  PAD_CDRX_L1P, output wire [2:0] PAD_CDRX_L1N,  // data lane 1
-    output wire [2:0]  PAD_CDRX_L2P, output wire [2:0] PAD_CDRX_L2N,  // data lane 2
-    output wire [2:0]  PAD_CDRX_L3P, output wire [2:0] PAD_CDRX_L3N,  // data lane 3
-    output wire [2:0]  PAD_CDRX_L4P, output wire [2:0] PAD_CDRX_L4N,  // clock lane
+    output wire [2:0]  PAD_CDTX_L0P, output wire [2:0] PAD_CDTX_L0N,  // data lane 0
+    output wire [2:0]  PAD_CDTX_L1P, output wire [2:0] PAD_CDTX_L1N,  // data lane 1
+    output wire [2:0]  PAD_CDTX_L2P, output wire [2:0] PAD_CDTX_L2N,  // data lane 2
+    output wire [2:0]  PAD_CDTX_L3P, output wire [2:0] PAD_CDTX_L3N,  // data lane 3
+    output wire [2:0]  PAD_CDTX_L4P, output wire [2:0] PAD_CDTX_L4N,  // clock lane
 
     // status ---------------------------------------------------------------
     output reg         busy,
@@ -110,33 +110,34 @@ module mipi_tx_dphy_model #(
     localparam [7:0] DT_RAW8  = 8'h2A;
     localparam [7:0] DT_RAW10 = 8'h2B;
     localparam [7:0] DT_RAW12 = 8'h2C;
+    localparam [7:0] DT_RAW14 = 8'h2D;
 
     // packet buffers
     localparam integer MAXB = 24576;            // max bytes in one HS packet
     reg  [7:0] pkt  [0:MAXB-1];                  // assembled packet bytes
     integer    pkt_len;
-    reg  [7:0] lbuf [0:3][0:(MAXB/4)+3];         // per-lane byte buffers
+    reg  [7:0] lbuf [0:3][0:MAXB-1];             // per-lane byte buffers
     integer    lcnt [0:3];
 
     // golden pattern storage (used by golden_pixel.vh)
-    reg  [11:0] gp_mem [0:GP_MAX-1];
+    reg  [13:0] gp_mem [0:GP_MAX-1];
     integer     gp_fcount;
 
     // lane pad drive registers : index 0..3 = data lanes, 4 = clock lane
     reg  [2:0] padP [0:4];
     reg  [2:0] padN [0:4];
 
-    assign PAD_CDRX_L0P = padP[0];  assign PAD_CDRX_L0N = padN[0];
-    assign PAD_CDRX_L1P = padP[1];  assign PAD_CDRX_L1N = padN[1];
-    assign PAD_CDRX_L2P = padP[2];  assign PAD_CDRX_L2N = padN[2];
-    assign PAD_CDRX_L3P = padP[3];  assign PAD_CDRX_L3N = padN[3];
-    assign PAD_CDRX_L4P = padP[4];  assign PAD_CDRX_L4N = padN[4];
+    assign PAD_CDTX_L0P = padP[0];  assign PAD_CDTX_L0N = padN[0];
+    assign PAD_CDTX_L1P = padP[1];  assign PAD_CDTX_L1N = padN[1];
+    assign PAD_CDTX_L2P = padP[2];  assign PAD_CDTX_L2N = padN[2];
+    assign PAD_CDTX_L3P = padP[3];  assign PAD_CDTX_L3N = padN[3];
+    assign PAD_CDTX_L4P = padP[4];  assign PAD_CDTX_L4N = padN[4];
 
-    // sampled run-time configuration
+    // sampled configuration derived from parameters
     reg [15:0] cfg_h, cfg_v, cfg_nf;
     reg [7:0]  cfg_dt;
     reg [2:0]  cfg_pat;
-    reg [11:0] cfg_solid;
+    reg [13:0] cfg_solid;
     reg        cfg_skew;
     integer    cfg_bits;
     integer    cfg_spl;          // samples per line (= hsize * samples-per-pixel)
@@ -160,6 +161,7 @@ module mipi_tx_dphy_model #(
                 DT_RAW8 : dt_bits = 8;
                 DT_RAW10: dt_bits = 10;
                 DT_RAW12: dt_bits = 12;
+                DT_RAW14: dt_bits = 14;
                 default : dt_bits = 8;
             endcase
         end
@@ -232,43 +234,44 @@ module mipi_tx_dphy_model #(
         end
     endtask
 
-    // ----- send the assembled packet across the 4 data lanes -------------
+    // ----- send the assembled packet across the active data lanes --------
     task send_packet;
         integer i, L;
         begin
             lcnt[0]=0; lcnt[1]=0; lcnt[2]=0; lcnt[3]=0;
             for (i = 0; i < pkt_len; i = i + 1) begin
-                L = i % 4;
+                L = i % LANE_NUM;
                 lbuf[L][lcnt[L]] = pkt[i];
                 lcnt[L] = lcnt[L] + 1;
             end
-            // LP-11 -> LP-01 -> LP-00 (HS request) on all data lanes
-            set_lp(0,1'b0,1'b1); set_lp(1,1'b0,1'b1); set_lp(2,1'b0,1'b1); set_lp(3,1'b0,1'b1);
+            // LP-11 -> LP-01 -> LP-00 (HS request) on active data lanes
+            for (L = 0; L < LANE_NUM; L = L + 1) set_lp(L,1'b0,1'b1);
             #(T_LPX_PS);
-            set_lp(0,1'b0,1'b0); set_lp(1,1'b0,1'b0); set_lp(2,1'b0,1'b0); set_lp(3,1'b0,1'b0);
+            for (L = 0; L < LANE_NUM; L = L + 1) set_lp(L,1'b0,1'b0);
             #(T_HS_PREP_PS);
             fork
-                tx_lane_stream(0, lcnt[0]);
-                tx_lane_stream(1, lcnt[1]);
-                tx_lane_stream(2, lcnt[2]);
-                tx_lane_stream(3, lcnt[3]);
+                begin tx_lane_stream(0, lcnt[0]); end
+                begin if (LANE_NUM > 1) tx_lane_stream(1, lcnt[1]); end
+                begin if (LANE_NUM > 2) tx_lane_stream(2, lcnt[2]); end
+                begin if (LANE_NUM > 3) tx_lane_stream(3, lcnt[3]); end
             join
             #(T_LPX_PS);
         end
     endtask
 
-    // ----- deskew calibration burst across all data lanes ----------------
+    // ----- deskew calibration burst across active data lanes -------------
     task send_skew_cal;
+        integer L;
         begin
-            set_lp(0,1'b0,1'b1); set_lp(1,1'b0,1'b1); set_lp(2,1'b0,1'b1); set_lp(3,1'b0,1'b1);
+            for (L = 0; L < LANE_NUM; L = L + 1) set_lp(L,1'b0,1'b1);
             #(T_LPX_PS);
-            set_lp(0,1'b0,1'b0); set_lp(1,1'b0,1'b0); set_lp(2,1'b0,1'b0); set_lp(3,1'b0,1'b0);
+            for (L = 0; L < LANE_NUM; L = L + 1) set_lp(L,1'b0,1'b0);
             #(T_HS_PREP_PS);
             fork
-                tx_lane_deskew(0);
-                tx_lane_deskew(1);
-                tx_lane_deskew(2);
-                tx_lane_deskew(3);
+                begin tx_lane_deskew(0); end
+                begin if (LANE_NUM > 1) tx_lane_deskew(1); end
+                begin if (LANE_NUM > 2) tx_lane_deskew(2); end
+                begin if (LANE_NUM > 3) tx_lane_deskew(3); end
             join
             #(T_LPX_PS);
         end
@@ -309,18 +312,18 @@ module mipi_tx_dphy_model #(
     // ----- build a CSI-2 long packet (one image line) --------------------
     task build_line;
         input [31:0] frame;
-        input [15:0] row;
+        input [31:0] row;
         integer c, b, wc;
-        reg [11:0] p0, p1, p2, p3;
+        reg [13:0] p0, p1, p2, p3;
         reg [15:0] crc;
         reg [7:0]  di;
         begin
             b = 4;                                   // payload starts after PH
             // cfg_spl = samples per line (RAW: = hsize; YUV422: = 2*hsize).
-            // Packing is selected by the sample bit-width (8/10/12).
+            // Packing is selected by the sample bit-width (8/10/12/14).
             if (cfg_bits == 8) begin
                 for (c = 0; c < cfg_spl; c = c + 1) begin
-                    p0 = golden_pixel(frame,row,c[15:0],cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,c,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b] = p0[7:0]; b = b + 1;
                 end
             end else if (cfg_bits == 10) begin
@@ -336,14 +339,29 @@ module mipi_tx_dphy_model #(
                     pkt[b+4] = {p3[9:8], p2[9:8], p1[9:8], p0[9:8]};
                     b = b + 5;
                 end
-            end else begin // 12-bit
+            end else if (cfg_bits == 12) begin
                 for (c = 0; c < cfg_spl; c = c + 2) begin
-                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,c,    cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p1 = golden_pixel(frame,row,c + 1,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b  ] = p0[7:0];
                     pkt[b+1] = p1[7:0];
                     pkt[b+2] = {p1[11:8], p0[11:8]};
                     b = b + 3;
+                end
+            end else begin // 14-bit
+                for (c = 0; c < cfg_spl; c = c + 4) begin
+                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p2 = golden_pixel(frame,row,c + 2,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p3 = golden_pixel(frame,row,c + 3,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    pkt[b  ] = p0[7:0];
+                    pkt[b+1] = p1[7:0];
+                    pkt[b+2] = p2[7:0];
+                    pkt[b+3] = p3[7:0];
+                    pkt[b+4] = {p1[9:8],  p0[13:8]};
+                    pkt[b+5] = {p2[11:8], p1[13:10]};
+                    pkt[b+6] = {p3[13:8], p2[13:12]};
+                    b = b + 7;
                 end
             end
             wc = b - 4;                              // word count = payload bytes
@@ -372,7 +390,7 @@ module mipi_tx_dphy_model #(
                     if (cfg_skew) send_skew_cal;
                     build_short(DT_FS, fnum[15:0]);  send_packet;
                     for (r = 0; r < cfg_v; r = r + 1) begin
-                        build_line(fnum, r[15:0]);   send_packet;
+                        build_line(fnum, r);         send_packet;
                     end
                     build_short(DT_FE, fnum[15:0]);  send_packet;
                     #(T_FRAME_GAP_PS);
@@ -398,16 +416,20 @@ module mipi_tx_dphy_model #(
         begin
             // supported data type ?
             case (cfg_dt)
-                DT_RAW8, DT_RAW10, DT_RAW12, DT_YUV8, DT_YUV10: ;
+                DT_RAW8, DT_RAW10, DT_RAW12, DT_RAW14, DT_YUV8, DT_YUV10: ;
                 default: begin
                     $display("[tx] CONFIG ERROR: unsupported data_type 0x%02h", cfg_dt);
-                    $display("[tx]   supported: 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x1E YUV422-8, 0x1F YUV422-10");
+                    $display("[tx]   supported: 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x2D RAW14, 0x1E YUV422-8, 0x1F YUV422-10");
                     $finish;
                 end
             endcase
             // non-zero frame
             if (cfg_h == 0 || cfg_v == 0) begin
                 $display("[tx] CONFIG ERROR: Hsize/Vsize must be > 0 (got %0dx%0d)", cfg_h, cfg_v);
+                $finish;
+            end
+            if (LANE_NUM != 1 && LANE_NUM != 2 && LANE_NUM != 4) begin
+                $display("[tx] CONFIG ERROR: LANE_NUM=%0d unsupported; use 1, 2, or 4", LANE_NUM);
                 $finish;
             end
             // 8K bound
@@ -426,12 +448,18 @@ module mipi_tx_dphy_model #(
                 $display("[tx] CONFIG ERROR: 12-bit packing needs samples/line %% 2 == 0 (Hsize=%0d)", cfg_h);
                 $finish;
             end
+            if (cfg_bits == 14 && (cfg_spl % 4 != 0)) begin
+                $display("[tx] CONFIG ERROR: 14-bit packing needs samples/line %% 4 == 0 (Hsize=%0d)", cfg_h);
+                $finish;
+            end
             if (cfg_bits == 8)
                 line_bytes = cfg_spl;
             else if (cfg_bits == 10)
                 line_bytes = (cfg_spl / 4) * 5;
-            else
+            else if (cfg_bits == 12)
                 line_bytes = (cfg_spl / 2) * 3;
+            else
+                line_bytes = (cfg_spl / 4) * 7;
             if (line_bytes + 6 > MAXB) begin
                 $display("[tx] CONFIG ERROR: line packet needs %0d bytes, exceeds MAXB=%0d", line_bytes + 6, MAXB);
                 $finish;
@@ -474,19 +502,19 @@ module mipi_tx_dphy_model #(
         forever begin
             wait (trigger === 1'b1);
             // sample configuration
-            cfg_h     = hsize;
-            cfg_v     = vsize;
-            cfg_dt    = data_type;
-            cfg_pat   = pattern_sel;
-            cfg_solid = solid_val;
-            cfg_nf    = (num_frames == 0) ? 16'd1 : num_frames;
-            cfg_skew  = skew_cal_en;
-            cfg_bits  = dt_bits(data_type);
-            cfg_spl   = cfg_h * dt_spp(data_type);
+            cfg_h     = HSIZE;
+            cfg_v     = VSIZE;
+            cfg_dt    = DATA_TYPE;
+            cfg_pat   = PATTERN_SEL;
+            cfg_solid = SOLID_VAL;
+            cfg_nf    = (NUM_FRAMES == 0) ? 16'd1 : NUM_FRAMES;
+            cfg_skew  = (SKEW_CAL_EN != 0);
+            cfg_bits  = dt_bits(DATA_TYPE);
+            cfg_spl   = cfg_h * dt_spp(DATA_TYPE);
             check_config;                            // stop on illegal setup
             busy      = 1'b1;
-            $display("[tx] %0t START  %0dMbps (UI=%0dps)  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
-                     $time, LANE_SPEED_MBPS, UI_PS, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+            $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                     $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
             for (fi = 0; fi < cfg_nf; fi = fi + 1) begin
                 send_frame(fi[31:0]);
                 frame_done = 1'b1; #(1); frame_done = 1'b0;

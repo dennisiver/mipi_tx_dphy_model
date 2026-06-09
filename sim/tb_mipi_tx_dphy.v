@@ -16,7 +16,7 @@
 `timescale 1ps/1ps
 
 `ifndef FMT
- `define FMT 10          // 8 / 10 / 12
+ `define FMT 10          // 8 / 10 / 12 / 14
 `endif
 `ifndef HS
  `define HS  64          // Hsize
@@ -37,7 +37,13 @@
  `define SPEED 2500      // per-lane HS bit rate in Mbps (timing auto-derived)
 `endif
 `ifndef YUV
- `define YUV 0           // 0 = RAW (FMT 8/10/12), 1 = YUV422 (FMT 8/10)
+ `define YUV 0           // 0 = RAW (FMT 8/10/12/14), 1 = YUV422 (FMT 8/10)
+`endif
+`ifndef GP_FILE
+ `define GP_FILE "golden_pattern.txt"
+`endif
+`ifndef LANE_NUM
+ `define LANE_NUM 4
 `endif
 
 module tb_mipi_tx_dphy;
@@ -47,25 +53,22 @@ module tb_mipi_tx_dphy;
     localparam integer EXP_SAMPLES_PER_LINE = (`YUV) ? (2 * `HS) : `HS;
     localparam integer EXP_FRAMES = (`NF == 0) ? 1 : `NF;
     localparam integer EXP_PIXELS = EXP_SAMPLES_PER_LINE * `VS * EXP_FRAMES;
+    localparam [13:0] SOLID_PATTERN = 14'h03AA;
 
     // data type from format.  YUV422: FMT must be 8 or 10.
     localparam [7:0] DT = (`YUV) ? ((`FMT==10) ? 8'h1F : 8'h1E) :
                           (`FMT==8)  ? 8'h2A :
-                          (`FMT==12) ? 8'h2C : 8'h2B;
+                          (`FMT==12) ? 8'h2C :
+                          (`FMT==14) ? 8'h2D : 8'h2B;
 
-    // injected per-lane skew (only when SKEW=1); kept < UI/2 for the stub
+    // injected per-lane skew (only when SKEW=1); scales with UI and stays < UI/2
     localparam integer SK0 = `SKEW ?   0 : 0;
-    localparam integer SK1 = `SKEW ?  40 : 0;
-    localparam integer SK2 = `SKEW ?  90 : 0;
-    localparam integer SK3 = `SKEW ? 150 : 0;
+    localparam integer SK1 = `SKEW ? (UI_PS / 10)     : 0;
+    localparam integer SK2 = `SKEW ? (UI_PS / 4)      : 0;
+    localparam integer SK3 = `SKEW ? ((UI_PS * 3) / 8): 0;
 
     reg         rst_n;
     reg         trigger;
-    reg  [15:0] hsize, vsize, num_frames;
-    reg  [7:0]  data_type;
-    reg  [2:0]  pattern_sel;
-    reg  [11:0] solid_val;
-    reg         skew_cal_en;
 
     // ---- the 5 differential lanes (P/N, 3-bit digital encoding) ----------
     wire [2:0] L0P,L0N, L1P,L1N, L2P,L2N, L3P,L3N, L4P,L4N;
@@ -77,29 +80,30 @@ module tb_mipi_tx_dphy;
     wire        rx_vsync;
     wire        rx_hsync;
     wire        rx_stb;
-    wire [11:0] rx_data;
+    wire [13:0] rx_data;
 
     // ------------------------------------------------------------------ Tx
     mipi_tx_dphy_model #(
         .LANE_SPEED_MBPS (SPEED),
+        .LANE_NUM        (`LANE_NUM),
+        .HSIZE           (`HS),
+        .VSIZE           (`VS),
+        .DATA_TYPE       (DT),
+        .PATTERN_SEL     (`PAT),
+        .SOLID_VAL       (SOLID_PATTERN),
+        .NUM_FRAMES      (`NF),
+        .SKEW_CAL_EN     (`SKEW),
         .SKEW_L0_PS (SK0), .SKEW_L1_PS (SK1),
         .SKEW_L2_PS (SK2), .SKEW_L3_PS (SK3),
-        .GP_FILE    ("golden_pattern.txt")
+        .GP_FILE    (`GP_FILE)
     ) U_TX (
         .rst_n      (rst_n),
         .trigger    (trigger),
-        .hsize      (hsize),
-        .vsize      (vsize),
-        .data_type  (data_type),
-        .pattern_sel(pattern_sel),
-        .solid_val  (solid_val),
-        .num_frames (num_frames),
-        .skew_cal_en(skew_cal_en),
-        .PAD_CDRX_L0P(L0P), .PAD_CDRX_L0N(L0N),
-        .PAD_CDRX_L1P(L1P), .PAD_CDRX_L1N(L1N),
-        .PAD_CDRX_L2P(L2P), .PAD_CDRX_L2N(L2N),
-        .PAD_CDRX_L3P(L3P), .PAD_CDRX_L3N(L3N),
-        .PAD_CDRX_L4P(L4P), .PAD_CDRX_L4N(L4N),
+        .PAD_CDTX_L0P(L0P), .PAD_CDTX_L0N(L0N),
+        .PAD_CDTX_L1P(L1P), .PAD_CDTX_L1N(L1N),
+        .PAD_CDTX_L2P(L2P), .PAD_CDTX_L2N(L2N),
+        .PAD_CDTX_L3P(L3P), .PAD_CDTX_L3N(L3N),
+        .PAD_CDTX_L4P(L4P), .PAD_CDTX_L4N(L4N),
         .busy       (),
         .frame_done ()
     );
@@ -107,6 +111,7 @@ module tb_mipi_tx_dphy;
     // ------------------------------------------------- Rx (stub or M31) ---
     mipi_rx_dphy_stub #(
         .LANE_SPEED_MBPS (SPEED),
+        .LANE_NUM        (`LANE_NUM),
         .DATA_BITS       (`FMT)
     ) U_RX (
         .PAD_CDRX_L0P(L0P), .PAD_CDRX_L0N(L0N),
@@ -121,9 +126,10 @@ module tb_mipi_tx_dphy;
     // ------------------------------------------------------------- checker
     mipi_rx_checker #(
         .BITS    (`FMT),
+        .HSIZE   (`HS),
         .PATTERN (`PAT),
-        .SOLID   (12'h3AA),
-        .GP_FILE ("golden_pattern.txt"),
+        .SOLID   (SOLID_PATTERN),
+        .GP_FILE (`GP_FILE),
         .VERBOSE (1)
     ) U_CHK (
         .rst_n      (rst_n),
@@ -132,7 +138,6 @@ module tb_mipi_tx_dphy;
         .hsync      (rx_hsync),
         .stb        (rx_stb),
         .data       (rx_data),
-        .hsize      (hsize),
         .error_count(),
         .pixel_count(),
         .checking   ()
@@ -148,8 +153,12 @@ module tb_mipi_tx_dphy;
             $display("[tb] CONFIG ERROR: YUV422 supports FMT=8 or FMT=10 only (got FMT=%0d)", `FMT);
             $fatal(1);
         end
-        if ((`FMT != 8) && (`FMT != 10) && (`FMT != 12)) begin
-            $display("[tb] CONFIG ERROR: FMT must be 8, 10 or 12 (got %0d)", `FMT);
+        if ((`FMT != 8) && (`FMT != 10) && (`FMT != 12) && (`FMT != 14)) begin
+            $display("[tb] CONFIG ERROR: FMT must be 8, 10, 12 or 14 (got %0d)", `FMT);
+            $fatal(1);
+        end
+        if ((`LANE_NUM != 1) && (`LANE_NUM != 2) && (`LANE_NUM != 4)) begin
+            $display("[tb] CONFIG ERROR: LANE_NUM must be 1, 2 or 4 (got %0d)", `LANE_NUM);
             $fatal(1);
         end
     end
@@ -161,13 +170,6 @@ module tb_mipi_tx_dphy;
 
         rst_n       = 1'b0;
         trigger     = 1'b0;
-        hsize       = `HS;
-        vsize       = `VS;
-        num_frames  = `NF;
-        data_type   = DT;
-        pattern_sel = `PAT;
-        solid_val   = 12'h3AA;
-        skew_cal_en = `SKEW;
 
         #20000 rst_n = 1'b1;
 

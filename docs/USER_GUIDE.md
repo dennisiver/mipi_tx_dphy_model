@@ -3,12 +3,12 @@
 本專案以 Verilog 建立一個 **MIPI Tx D-PHY 行為模型 (behavioural model)**，
 用來驅動並驗證 **M31 MIPI Rx D-PHY model**。
 
-- 4 條 data lane + 1 條 clock lane，連續時脈 (continuous-clock) HS 模式
+- 1 / 2 / 4 條 active data lane + 1 條 clock lane，連續時脈 (continuous-clock) HS 模式
 - 每條 lane 最高 **2.5 Gbps**；**只需設定 `LANE_SPEED_MBPS`，UI 與所有
   D-PHY 時序自動依 spec 推算**
 - 最大 **8K** 影像尺寸（Hsize × Vsize 可調）
 - 支援 **skew calibration**（per-lane skew 注入 + deskew calibration burst）
-- 支援 **RAW8 / RAW10 / RAW12** 與 **YUV422 8-bit / 10-bit**，golden pattern
+- 支援 **RAW8 / RAW10 / RAW12 / RAW14** 與 **YUV422 8-bit / 10-bit**，golden pattern
   位元數依格式自動選擇
 - 多種內建 golden pattern + 可由 `golden_pattern.txt` 載入
 - **input trigger** 控制 Tx 開始送資料的時間
@@ -57,12 +57,14 @@ mipi_tx_dphy_model/
 Lane 對應（與 M31 預設相同）：
 
 ```
-PAD_CDRX_L0P/N = data lane 0
-PAD_CDRX_L1P/N = data lane 1
-PAD_CDRX_L2P/N = data lane 2
-PAD_CDRX_L3P/N = data lane 3
-PAD_CDRX_L4P/N = clock lane
+PAD_CDTX_L0P/N = data lane 0
+PAD_CDTX_L1P/N = data lane 1
+PAD_CDTX_L2P/N = data lane 2
+PAD_CDTX_L3P/N = data lane 3
+PAD_CDTX_L4P/N = clock lane
 ```
+
+接到 M31 Rx D-PHY model 時，Tx 端 `PAD_CDTX_*` 對接 Rx 端 `PAD_CDRX_*`。
 
 LP 狀態編碼（pad[2] = LP 準位）：
 
@@ -76,23 +78,24 @@ HS 狀態：`P = {1'b0, bit, 1'b1}`、`N = {1'b0, ~bit, 1'b1}`。
 
 ---
 
-## 3. Tx 頂層 Port
+## 3. Tx 頂層 Parameter / Port
 
 ```verilog
 mipi_tx_dphy_model #(
     .LANE_SPEED_MBPS(2500),  // 唯一的時序旋鈕：每條 lane 的 bit rate（<=2500）
+    .LANE_NUM       (4),     // active data lanes: 1 / 2 / 4
+    .HSIZE          (64),    // 每行像素數（最大 7680）
+    .VSIZE          (8),     // 每張影像行數（最大 4320）
+    .DATA_TYPE      (8'h2B), // 見下方 data type 表
+    .PATTERN_SEL    (0),     // 0..5（見第 5 節）
+    .SOLID_VAL      (14'h03AA),
+    .NUM_FRAMES     (2),
+    .SKEW_CAL_EN    (0),
     .SKEW_L0_PS(0), .SKEW_L1_PS(0), .SKEW_L2_PS(0), .SKEW_L3_PS(0),
     .GP_FILE("golden_pattern.txt")
 ) u_tx (
     .rst_n      (rst_n),       // 低有效 reset
     .trigger    (trigger),     // 拉高 -> 開始送資料（可重複觸發）
-    .hsize      (hsize),       // 每行像素數（最大 7680）
-    .vsize      (vsize),       // 每張影像行數（最大 4320）
-    .data_type  (data_type),   // 見下方 data type 表
-    .pattern_sel(pattern_sel), // 0..5（見第 5 節）
-    .solid_val  (solid_val),   // solid pattern 的固定值
-    .num_frames (num_frames),  // 每次觸發送幾張 frame
-    .skew_cal_en(skew_cal_en), // 1 = 每張 frame 前送 deskew calibration burst
     /* 10 條 pad bus 連到 M31 Rx ... */
     .busy       (busy),        // 傳輸中
     .frame_done (frame_done)   // 每張 frame 完成時送出 1-cycle 脈衝
@@ -104,6 +107,14 @@ mipi_tx_dphy_model #(
 | 參數                | 預設    | 說明                                            |
 |---------------------|---------|-------------------------------------------------|
 | `LANE_SPEED_MBPS`   | 2500    | **唯一時序旋鈕**：每條 lane 的 bit rate（Mbps，<=2500）。UI 與所有 D-PHY 時序自動推算 |
+| `LANE_NUM`          | 4       | active data lane 數，支援 1 / 2 / 4             |
+| `HSIZE`             | 64      | 每行 active pixel 數（最大 7680）               |
+| `VSIZE`             | 8       | 每張 frame active line 數（最大 4320）          |
+| `DATA_TYPE`         | 0x2B    | CSI-2 data type：RAW8 / RAW10 / RAW12 / RAW14 / YUV422 |
+| `PATTERN_SEL`       | 0       | golden pattern 選擇（0..5）                     |
+| `SOLID_VAL`         | 0x3AA   | `PATTERN_SEL=4` 時使用的固定 sample 值          |
+| `NUM_FRAMES`        | 2       | 每次 trigger 送出的 frame 數；0 會視為 1         |
+| `SKEW_CAL_EN`       | 0       | 1 = 每張 frame 前送 deskew calibration burst    |
 | `SKEW_Lx_PS`        | 0       | 每條 data lane 注入的 skew（ps）                |
 | `SKEW_PREAMBLE`     | 32      | deskew burst 前導的 0 bit 數                     |
 | `SKEW_CAL_BITS`     | 256     | deskew burst 中 0101… 切換的 bit 數              |
@@ -151,6 +162,7 @@ UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
 | `0x2A`      | RAW8         | 8             | 1               | 每 sample 1 byte    |
 | `0x2B`      | RAW10        | 10            | 1               | 4 samples → 5 bytes |
 | `0x2C`      | RAW12        | 12            | 1               | 2 samples → 3 bytes |
+| `0x2D`      | RAW14        | 14            | 1               | 4 samples → 7 bytes |
 | `0x1E`      | YUV422 8-bit | 8             | 2 (Cb,Y0,Cr,Y1) | 每 sample 1 byte    |
 | `0x1F`      | YUV422 10-bit| 10            | 2 (Cb,Y0,Cr,Y1) | 4 samples → 5 bytes |
 
@@ -158,8 +170,9 @@ UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
 > packing 與相同位元數的 RAW 完全一致（YUV8 同 RAW8、YUV10 同 RAW10）。
 > 模型把每個 component 當成一個 sample 送出，Rx 端則逐一輸出在 `Data` 上。
 
-對齊需求：RAW10 / YUV10 的 sample 數需為 4 的倍數、RAW12 的 sample 數需為 2
-的倍數（即 RAW10 `Hsize%4==0`、RAW12 `Hsize%2==0`、YUV10 `Hsize%2==0`）。
+對齊需求：RAW10 / RAW14 / YUV10 的 sample 數需為 4 的倍數、RAW12 的 sample
+數需為 2 的倍數（即 RAW10 `Hsize%4==0`、RAW12 `Hsize%2==0`、
+RAW14 `Hsize%4==0`、YUV10 `Hsize%2==0`）。
 
 > **內建設定檢查**：模型會在每次觸發送資料前自動檢查設定，違規時印出明確
 > 訊息並停止模擬（`$finish`），避免產生錯誤資料：
@@ -183,7 +196,7 @@ Frame End    (short packet, DT=0x01)
 ```
 
 - Packet Header：`DI, WC_L, WC_H, ECC`（含 MIPI 6-bit ECC）
-- Long packet payload：依格式做 RAW8/10/12 或 YUV422 8/10-bit packing
+- Long packet payload：依格式做 RAW8/10/12/14 或 YUV422 8/10-bit packing
 - Packet Footer：CSI-2 CRC-16（poly 0x1021 反射形式，初值 0xFFFF）
 - 4 條 lane 以 byte 為單位 round-robin 分配；每條 lane 起始送 sync byte `0xB8`
 - Clock lane 採連續時脈，整張 frame 期間持續輸出 DDR clock
@@ -195,46 +208,45 @@ Frame End    (short packet, DT=0x01)
 
 ## 5. Golden Pattern
 
-`pattern_sel` 選擇 golden pattern，位元數依 `data_type` 自動套用遮罩
-（RAW8 / YUV8→8、RAW10 / YUV10→10、RAW12→12 bit）。pattern 以 sample 為單位
+`PATTERN_SEL` 選擇 golden pattern，位元數依 `DATA_TYPE` 自動套用遮罩
+（RAW8 / YUV8→8、RAW10 / YUV10→10、RAW12→12 bit、RAW14→14 bit）。pattern 以 sample 為單位
 產生（YUV422 的每個 component 都是一個 sample，`col` 索引跑遍 `2*Hsize`）：
 
-| pattern_sel | 名稱              | 內容                                   |
+| PATTERN_SEL | 名稱              | 內容                                   |
 |-------------|-------------------|----------------------------------------|
 | 0           | sequential / ramp | 連續遞增值 `(row*hsize + col + frame)` |
 | 1           | horizontal gradient | 值隨欄位 `col` 變化                   |
 | 2           | vertical gradient | 值隨行 `row` 變化                      |
 | 3           | checkerboard      | 8×8 方格的滿格 / 0                      |
-| 4           | solid             | 固定值 `solid_val`                     |
+| 4           | solid             | 固定值 `SOLID_VAL`                     |
 | 5           | from file         | 由 `golden_pattern.txt` 載入           |
 
 ### 5.1 相關 Port / Parameter
 
-Golden pattern 由 Tx 的 runtime port 與 instance parameter 一起控制：
+Golden pattern 由 Tx 的 instance parameter 控制：
 
 | 名稱          | 類型      | 預設 / 範圍          | 說明 |
 |---------------|-----------|----------------------|------|
-| `pattern_sel` | input port | `0..5`               | 選擇要送出的 pattern。testbench 用 Makefile 參數 `PAT` 指定。 |
-| `solid_val`   | input port | 12-bit value         | `pattern_sel=4` 時送出的固定值；會依 RAW/YUV 位元數自動 mask。 |
-| `GP_FILE`     | parameter | `"golden_pattern.txt"` | `pattern_sel=5` 時讀取的外部 pattern 檔案路徑。 |
+| `PATTERN_SEL` | parameter | `0..5`               | 選擇要送出的 pattern。testbench 用 Makefile 參數 `PAT` 指定。 |
+| `SOLID_VAL`   | parameter | 14-bit value         | `PATTERN_SEL=4` 時送出的固定值；會依 RAW/YUV 位元數自動 mask。 |
+| `GP_FILE`     | parameter | `"golden_pattern.txt"` | `PATTERN_SEL=5` 時讀取的外部 pattern 檔案路徑。 |
 | `GP_MAX`      | parameter | `65536`              | 最多從 `GP_FILE` 載入的 sample 數。 |
 
-`pattern_sel` 與 `solid_val` 是 runtime configuration，在每次 trigger 開始送 frame sequence
-時被 Tx sample；也就是 transmission 進行中改變這兩個 port，不會影響已經開始的那一輪傳輸。
-`GP_FILE` 與 `GP_MAX` 是 elaboration-time parameter，需要在 instantiate Tx / checker 時指定。
+這些都是 elaboration-time parameter，需要在 instantiate Tx / checker 時指定。
 
 checker 端也要使用相同設定：
 
 ```verilog
 mipi_rx_checker #(
     .BITS    (10),
+    .HSIZE   (hsize_used_by_tx),
     .PATTERN (pattern_sel_used_by_tx),
     .SOLID   (solid_val_used_by_tx),
     .GP_FILE ("golden_pattern.txt")
 ) u_chk (...);
 ```
 
-目前 testbench 中 `SOLID` 固定為 `12'h3AA`，Tx 的 `solid_val` 也設為同一個值。
+目前 testbench 中 `SOLID` 固定為 `14'h03AA`，Tx 的 `SOLID_VAL` 也設為同一個值。
 
 ### 5.2 使用範例
 
@@ -251,26 +263,26 @@ make FMT=10 PAT=0
 make FMT=12 PAT=3
 ```
 
-使用 solid pattern。testbench 預設固定值為 `12'h3AA`：
+使用 solid pattern。testbench 預設固定值為 `14'h03AA`：
 
 ```bash
 make FMT=10 PAT=4
 ```
 
-若要改 solid value，請在自己的 testbench 中設定 Tx 的 `solid_val`，並同步設定
+若要改 solid value，請在自己的 testbench 中設定 Tx 的 `SOLID_VAL`，並同步設定
 checker 的 `SOLID`：
 
 ```verilog
-localparam [11:0] SOLID_PATTERN = 12'h155;
+localparam [13:0] SOLID_PATTERN = 14'h0155;
 
-mipi_tx_dphy_model u_tx (
-    .pattern_sel(3'd4),
-    .solid_val  (SOLID_PATTERN),
-    // other ports...
-);
+mipi_tx_dphy_model #(
+    .PATTERN_SEL(4),
+    .SOLID_VAL  (SOLID_PATTERN)
+) u_tx (...);
 
 mipi_rx_checker #(
     .BITS (10),
+    .HSIZE(64),
     .PATTERN(4),
     .SOLID(SOLID_PATTERN)
 ) u_chk (...);
@@ -280,6 +292,7 @@ mipi_rx_checker #(
 
 ```bash
 make FMT=10 PAT=5
+make FMT=10 PAT=5 GP_FILE=patterns/my_golden_pattern.txt
 ```
 
 若檔案不在 repo root，請在 Tx 與 checker 使用相同的 `GP_FILE`：
@@ -291,6 +304,7 @@ mipi_tx_dphy_model #(
 ) u_tx (...);
 
 mipi_rx_checker #(
+    .HSIZE (64),
     .GP_FILE("../patterns/my_golden_pattern.txt"),
     .GP_MAX (131072)
 ) u_chk (...);
@@ -344,26 +358,28 @@ lane2:           |HS burst starts here| + SKEW_L2_PS
 lane3:                |HS burst starts here| + SKEW_L3_PS
 ```
 
-testbench 中 `make SKEW=1` 會使用下列示範值：
+testbench 中 `make SKEW=1` 會依 `UI_PS` 比例產生示範 skew，改變 `SPEED` 時 skew
+也會跟著縮放：
 
 ```verilog
 SKEW_L0_PS = 0
-SKEW_L1_PS = 40
-SKEW_L2_PS = 90
-SKEW_L3_PS = 150
+SKEW_L1_PS = UI_PS / 10
+SKEW_L2_PS = UI_PS / 4
+SKEW_L3_PS = UI_PS * 3 / 8
 ```
 
+例如 `SPEED=2500` 時 `UI_PS=400`，上述值約為 40 ps / 100 ps / 150 ps。
 這些值刻意保持小於 `UI/2`，方便示範用 `mipi_rx_dphy_stub` 正確取樣。接真正
 M31 Rx model 時，可依 M31 spec 與欲驗證的 skew margin 調整。
 
 ### 6.2 Deskew Calibration Burst
 
-`skew_cal_en = 1` 時，每張 frame 前會先送 deskew calibration burst，再送 CSI-2
+`SKEW_CAL_EN = 1` 時，每張 frame 前會先送 deskew calibration burst，再送 CSI-2
 Frame Start / line packets / Frame End：
 
 ```text
 clock lane 進入 HS continuous clock
-[deskew calibration burst]  <-- skew_cal_en=1 時送出
+[deskew calibration burst]  <-- SKEW_CAL_EN=1 時送出
 Frame Start short packet
 line 0 long packet
 line 1 long packet
@@ -385,7 +401,7 @@ calibration burst 的 pattern 由兩個參數控制：
 ^ preamble    ^ calibration toggle pattern
 ```
 
-Tx 會在 4 條 data lane 同時送出這段 calibration burst，但每條 lane 仍會套用
+Tx 會在 `LANE_NUM` 條 active data lane 同時送出這段 calibration burst，但每條 lane 仍會套用
 `SKEW_Lx_PS`。因此 Rx 可以利用這段固定且容易偵測的 pattern 估計各 lane 相對時間差，
 再對後續 CSI-2 packet 做 deskew。
 
@@ -401,22 +417,25 @@ make SKEW=1
 若要在自己的 testbench 直接設定 Tx instance，可寫成：
 
 ```verilog
+localparam integer LANE_SPEED_MBPS = 2500;
+localparam integer UI_PS = 1000000 / LANE_SPEED_MBPS;
+
 mipi_tx_dphy_model #(
-    .LANE_SPEED_MBPS(2500),
+    .LANE_SPEED_MBPS(LANE_SPEED_MBPS),
     .SKEW_L0_PS(0),
-    .SKEW_L1_PS(40),
-    .SKEW_L2_PS(90),
-    .SKEW_L3_PS(150),
+    .SKEW_L1_PS(UI_PS / 10),
+    .SKEW_L2_PS(UI_PS / 4),
+    .SKEW_L3_PS(UI_PS * 3 / 8),
+    .SKEW_CAL_EN(1),
     .SKEW_PREAMBLE(32),
     .SKEW_CAL_BITS(256)
 ) u_tx (
-    .skew_cal_en(1'b1),
     // other ports...
 );
 ```
 
 若只想注入 skew、但不送 calibration burst，可設定 `SKEW_Lx_PS` 非 0，
-並讓 `skew_cal_en = 1'b0`。這種情境可用來觀察 Rx 在沒有 deskew training 時的容忍度。
+並讓 `SKEW_CAL_EN = 0`。這種情境可用來觀察 Rx 在沒有 deskew training 時的容忍度。
 
 ---
 
@@ -425,8 +444,17 @@ mipi_tx_dphy_model #(
 `mipi_rx_checker` 直接比對 Rx 的平行輸出：
 
 ```
-Pxclk, Vsync, Hsync, Stb, Data[11:0]
+Pxclk, Vsync, Hsync, Stb, Data[13:0]
 ```
+
+`Data[13:0]` is MSB-aligned by format:
+
+| Format | Valid bits on `Data[13:0]` |
+|--------|-----------------------------|
+| RAW8 / YUV422_8 | `Data[13:6]` |
+| RAW10 / YUV422_10 | `Data[13:4]` |
+| RAW12 | `Data[13:2]` |
+| RAW14 | `Data[13:0]` |
 
 testbench 中以一組 **預留 wire** 接出，方便從任意 signal hierarchy 取訊號：
 
@@ -435,7 +463,7 @@ wire        rx_pxclk;
 wire        rx_vsync;
 wire        rx_hsync;
 wire        rx_stb;
-wire [11:0] rx_data;
+wire [13:0] rx_data;
 ```
 
 接真正 M31 model 時，把這些 wire 改接到 M31 的平行輸出埠即可，例如：
@@ -463,7 +491,7 @@ cd sim
 make
 
 # 指定格式 / 尺寸 / pattern / frame 數
-make FMT=12 HS=128 VS=16 PAT=2 NF=1
+make FMT=14 HS=128 VS=16 PAT=2 NF=1
 
 # YUV422 8-bit / 10-bit
 make YUV=1 FMT=8
@@ -475,15 +503,18 @@ make SPEED=1500
 # 開啟 skew 注入 + deskew calibration
 make SKEW=1
 
-# 回歸（RAW 18 種 + YUV422 12 種）
+# 指定 active data lane 數
+make LANE_NUM=2
+
+# 回歸（RAW 24 種 + YUV422 12 種）
 make matrix
 
 # 開波形
 make wave
 ```
 
-testbench 的 `+define` 旋鈕：`FMT`(8/10/12)、`YUV`(0/1)、`SPEED`(Mbps)、
-`HS`、`VS`、`PAT`(0..5)、`NF`、`SKEW`(0/1)。
+testbench 的 `+define` 旋鈕：`FMT`(8/10/12/14)、`YUV`(0/1)、`SPEED`(Mbps)、
+`HS`、`VS`、`PAT`(0..5)、`LANE_NUM`(1/2/4)、`NF`、`SKEW`(0/1)。
 
 通過時輸出：
 
@@ -499,7 +530,8 @@ testbench 的 `+define` 旋鈕：`FMT`(8/10/12)、`YUV`(0/1)、`SPEED`(Mbps)、
 ## 9. 接上真正的 M31 Rx D-PHY model
 
 1. 在 `tb_mipi_tx_dphy.v` 中，把 `mipi_rx_dphy_stub` (U_RX) 換成 M31 的
-   instance，pad 名稱對應 `PAD_CDRX_L0P/N … L4P/N`。
+   instance；Tx 端 pad 名稱為 `PAD_CDTX_L0P/N … L4P/N`，對接 M31 Rx 端
+   `PAD_CDRX_L0P/N … L4P/N`。
 2. 把第 7 節的 `rx_*` 預留 wire 接到 M31 的平行輸出。
 3. 視 M31 規格調整：`LANE_SPEED_MBPS`（時序會自動推算）、CSI-2 framing、
    以及比對器的極性參數。

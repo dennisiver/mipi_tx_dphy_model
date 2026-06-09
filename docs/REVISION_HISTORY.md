@@ -53,7 +53,7 @@
 
 - **影像 / 封包**
   - 支援最大 8K（Hsize × Vsize 可調，runtime input）。
-  - RAW8 / RAW10 / RAW12 三種格式，含正確的 CSI-2 bit packing。
+  - RAW8 / RAW10 / RAW12 / RAW14 格式，含正確的 CSI-2 bit packing。
   - CSI-2 framing：Frame Start / line long packet / Frame End，
     含 6-bit ECC 與 CRC-16。
   - 4-lane byte round-robin 分配。
@@ -67,7 +67,7 @@
   - 內建 pattern：ramp / horizontal gradient / vertical gradient /
     checkerboard / solid。
   - 支援 `golden_pattern.txt` 載入（每行一個十六進位值，自動依格式遮罩）。
-  - `mipi_rx_checker` 比對 Rx 平行輸出 (Pxclk/Vsync/Hsync/Stb/Data[11:0])，
+  - `mipi_rx_checker` 比對 Rx 平行輸出 (Pxclk/Vsync/Hsync/Stb/Data[13:0])，
     回報 `pixel_count` / `error_count`，並提供可接 signal hierarchy 的預留 wire。
 
 - **控制**
@@ -81,7 +81,7 @@
 
 ### 驗證結果
 
-- 以 Icarus Verilog 完成 RAW8 / RAW10 / RAW12 × pattern 0..5 的回歸，
+- 以 Icarus Verilog 完成 RAW8 / RAW10 / RAW12 / RAW14 × pattern 0..5 的回歸，
   全數 PASS；含 deskew calibration（注入 40/90/150 ps skew）情境亦 PASS。
 - 反向測試確認比對器能正確偵測 mismatch。
 

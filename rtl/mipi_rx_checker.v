@@ -6,7 +6,13 @@
 //
 //  Rx parallel port (connect through the reserved wires in the testbench so it
 //  can be tapped from any signal hierarchy):
-//      Pxclk, Vsync, Hsync, Stb, Data[11:0]
+//      Pxclk, Vsync, Hsync, Stb, Data[13:0]
+//
+//  Data is MSB-aligned by format:
+//      RAW8/YUV422_8   -> Data[13:6]
+//      RAW10/YUV422_10 -> Data[13:4]
+//      RAW12           -> Data[13:2]
+//      RAW14           -> Data[13:0]
 //
 //  Assumptions (override the *_ACT parameters to match the real M31 polarity):
 //      Stb   high  = a valid pixel is present on Data this Pxclk
@@ -16,7 +22,8 @@
 `timescale 1ps/1ps
 
 module mipi_rx_checker #(
-    parameter integer BITS      = 10,      // pixel bit-width (8/10/12)
+    parameter integer BITS      = 10,      // pixel bit-width (8/10/12/14)
+    parameter integer HSIZE     = 64,      // active pixels per line
     parameter integer PATTERN   = 0,       // must match the Tx pattern_sel
     parameter integer SOLID     = 0,       // must match the Tx solid_val
     parameter integer GP_MAX    = 65536,
@@ -31,24 +38,27 @@ module mipi_rx_checker #(
     input  wire        vsync,
     input  wire        hsync,
     input  wire        stb,
-    input  wire [11:0] data,
-    input  wire [15:0] hsize,
+    input  wire [13:0] data,
 
     output reg  [31:0] error_count,
     output reg  [31:0] pixel_count,
     output reg         checking
 );
 
-    reg [11:0] gp_mem [0:GP_MAX-1];
+    reg [13:0] gp_mem [0:GP_MAX-1];
     integer    gp_fcount;
 
     `include "golden_pixel.v"
 
     reg [31:0] frame;
-    reg [15:0] row, col;
+    reg [31:0] row, col;
     reg        vs_d, hs_d;
     reg        started;
-    reg [11:0] exp, got, mask;
+    reg [13:0] exp, got, mask;
+
+    localparam [15:0] CFG_HSIZE = HSIZE[15:0];
+    wire vs_edge = (vsync == VSYNC_ACT) && (vs_d != VSYNC_ACT);
+    wire hs_edge = (hsync == HSYNC_ACT) && (hs_d != HSYNC_ACT);
 
     initial begin
         gp_fcount   = 0;
@@ -78,29 +88,31 @@ module mipi_rx_checker #(
             hs_d <= hsync;
 
             // Vsync leading edge -> new frame.  Each line (including the
-            // first) is preceded by an Hsync, so seed row to -1 here.
-            if ((vsync == VSYNC_ACT) && (vs_d != VSYNC_ACT)) begin
+            // first) is preceded by an Hsync.  If that Hsync arrives in the
+            // same cycle as Vsync, start at row 0; otherwise seed row to -1
+            // and let the next Hsync advance it to row 0.
+            if (vs_edge) begin
                 if (started) frame <= frame + 1;
                 started  <= 1'b1;
                 checking <= 1'b1;
-                row <= 16'hFFFF;
+                row <= hs_edge ? 32'h0 : 32'hFFFF_FFFF;
                 col <= 0;
             end
             // Hsync leading edge -> new line
-            else if ((hsync == HSYNC_ACT) && (hs_d != HSYNC_ACT)) begin
+            else if (hs_edge) begin
                 row <= row + 1;
                 col <= 0;
             end
 
             // valid pixel -> compare
             if (started && (stb == STB_ACT)) begin
-                exp = golden_pixel(frame, row, col, hsize, PATTERN, BITS, SOLID);
-                got = data & mask;
+                exp = golden_pixel(frame, row, col, CFG_HSIZE, PATTERN, BITS, SOLID);
+                got = (BITS >= 14) ? (data & mask) : ((data >> (14 - BITS)) & mask);
                 pixel_count <= pixel_count + 1;
                 if (got !== exp) begin
                     error_count <= error_count + 1;
                     if (VERBOSE)
-                        $display("[chk] %0t MISMATCH f=%0d r=%0d c=%0d exp=0x%03h got=0x%03h",
+                        $display("[chk] %0t MISMATCH f=%0d r=%0d c=%0d exp=0x%04h got=0x%04h",
                                  $time, frame, row, col, exp, got);
                 end
                 col <= col + 1;
