@@ -82,10 +82,11 @@ HS 狀態：`P = {1'b0, bit, 1'b1}`、`N = {1'b0, ~bit, 1'b1}`。
 
 ```verilog
 mipi_tx_dphy_model #(
-    .LANE_SPEED_MBPS(2500),  // 唯一的時序旋鈕：每條 lane 的 bit rate（<=2500）
+    .LANE_SPEED_MBPS(2500),  // 每條 lane 的 bit rate（<=2500）；D-PHY 時序自動推算
     .LANE_NUM       (4),     // active data lanes: 1 / 2 / 4
     .HSIZE          (64),    // 每行像素數（最大 7680）
     .VSIZE          (8),     // 每張影像行數（最大 4320）
+    .PACKET_INTERVAL_NS(0),  // CSI-2 packet 間的 LP-11 gap，單位 ns；包含 FS/FE short packet
     .DATA_TYPE      (8'h2B), // 見下方 data type 表
     .PATTERN_SEL    (0),     // 0..5（見第 5 節）
     .SOLID_VAL      (14'h03AA),
@@ -106,10 +107,11 @@ mipi_tx_dphy_model #(
 
 | 參數                | 預設    | 說明                                            |
 |---------------------|---------|-------------------------------------------------|
-| `LANE_SPEED_MBPS`   | 2500    | **唯一時序旋鈕**：每條 lane 的 bit rate（Mbps，<=2500）。UI 與所有 D-PHY 時序自動推算 |
+| `LANE_SPEED_MBPS`   | 2500    | 每條 lane 的 bit rate（Mbps，<=2500）。UI 與所有 D-PHY HS 進出時序自動推算 |
 | `LANE_NUM`          | 4       | active data lane 數，支援 1 / 2 / 4             |
 | `HSIZE`             | 64      | 每行 active pixel 數（最大 7680）               |
 | `VSIZE`             | 8       | 每張 frame active line 數（最大 4320）          |
+| `PACKET_INTERVAL_NS`| 0       | CSI-2 packet 之間額外插入的 LP-11 gap，單位 ns；會套用在 FS short packet、每條 image line long packet、FE short packet 之間 |
 | `DATA_TYPE`         | 0x2B    | CSI-2 data type：RAW8 / RAW10 / RAW12 / RAW14 / YUV422 |
 | `PATTERN_SEL`       | 0       | golden pattern 選擇（0..5）                     |
 | `SOLID_VAL`         | 0x3AA   | `PATTERN_SEL=4` 時使用的固定 sample 值          |
@@ -126,6 +128,11 @@ mipi_tx_dphy_model #(
 你只要設定 `LANE_SPEED_MBPS`，**UI 與所有 D-PHY HS 進出時序都會自動依
 MIPI D-PHY spec 推算最佳（spec 最小）值**，並向上取整成整數個 UI（保證
 ≥ spec 下限，且 data bit 對齊到 DDR clock 格點）。使用者不需手動設定時序。
+
+`PACKET_INTERVAL_NS` 是 CSI-2 packet 間的額外 idle gap，單位為 ns。模型內部
+`timescale` 是 `1ps/1ps`，因此會自動乘以 1000 轉成 ps delay。此 gap 不是
+D-PHY HS entry/exit spec timing 的一部分；它是在一個 packet 完成並回到 LP-11
+之後、下一個 packet 開始之前插入，default `0` 表示不額外等待。
 
 ```
 UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
@@ -145,7 +152,7 @@ UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps
 模型啟動時會印出實際採用的時序，例如：
 
 ```
-[tx] auto timing @ 2500Mbps: UI=400 LPX=50000 HS_PREP=41600 HS_ZERO=107600 ...
+[tx] auto timing @ 2500Mbps: UI=400 LPX=50000 HS_PREP=41600 HS_ZERO=107600 ... packet_interval=0 (ns)
 ```
 
 > **提醒**：示範用 Rx 在 bit 週期中央取樣，可容忍約 < UI/2 的注入 skew；
@@ -180,6 +187,7 @@ RAW14 `Hsize%4==0`、YUV10 `Hsize%2==0`）。
 > - `Hsize`/`Vsize` 為 0、或超過 8K
 > - 上述 bit-packing 對齊不符
 > - `LANE_SPEED_MBPS` 超出 1..2500 範圍
+> - `PACKET_INTERVAL_NS` 小於 0
 >
 > testbench 另在 elaboration 階段檢查 `YUV=1` 只能搭配 `FMT=8/10`。
 
@@ -188,10 +196,13 @@ RAW14 `Hsize%4==0`、YUV10 `Hsize%2==0`）。
 ```
 [deskew calibration burst]（skew_cal_en=1 時）
 Frame Start  (short packet, DT=0x00)
+[PACKET_INTERVAL_NS gap]
 line 0       (long packet,  DT=data_type)
+[PACKET_INTERVAL_NS gap]
 line 1
   ...
 line Vsize-1
+[PACKET_INTERVAL_NS gap]
 Frame End    (short packet, DT=0x01)
 ```
 
@@ -200,6 +211,8 @@ Frame End    (short packet, DT=0x01)
 - Packet Footer：CSI-2 CRC-16（poly 0x1021 反射形式，初值 0xFFFF）
 - 4 條 lane 以 byte 為單位 round-robin 分配；每條 lane 起始送 sync byte `0xB8`
 - Clock lane 採連續時脈，整張 frame 期間持續輸出 DDR clock
+- `PACKET_INTERVAL_NS` 會影響 packet-to-packet 的間隔，包含 FS/FE short packet；
+  例如 `.PACKET_INTERVAL_NS(100)` 代表每個 packet 後額外等待 100 ns 再送下一個 packet
 
 > 若實際 M31 model 採用不同的 framing，請依其文件調整
 > `build_line` / `build_short` 與時序參數。
@@ -441,6 +454,25 @@ mipi_tx_dphy_model #(
 
 ## 7. Rx 比對器與「預留 wire」
 
+testbench 內建的 `mipi_rx_dphy_stub.v` 加上 `mipi_rx_checker.v` 可視為
+simulation/self-test 用的簡化 Rx model：
+
+```
+mipi_tx_dphy_model
+    -> D-PHY lanes
+    -> mipi_rx_dphy_stub
+    -> Pxclk/Vsync/Hsync/Stb/Data
+    -> mipi_rx_checker
+```
+
+其中 `mipi_rx_dphy_stub` 負責接收 Tx 的 D-PHY digital pad encoding，使用
+clock lane L4 取樣 data lane L0~L3，解出 CSI-2 packet，並輸出類似 Rx
+parallel video interface 的訊號；`mipi_rx_checker` 則將這些平行輸出與
+golden pattern 比對。這組模型適合驗證 Tx 的 D-PHY lane mapping、CSI-2
+framing、packet/pixel data 與基本時序，但它不是完整的 M31 Rx IP model。
+若要驗證實際 M31 Rx 行為，仍需依第 9 節替換成真正的 M31 Rx D-PHY model
+並接上實際 MIPI RX controller。
+
 `mipi_rx_checker` 直接比對 Rx 的平行輸出：
 
 ```
@@ -466,14 +498,16 @@ wire        rx_stb;
 wire [13:0] rx_data;
 ```
 
-接真正 M31 model 時，把這些 wire 改接到 M31 的平行輸出埠即可，例如：
+接真正 M31 Rx D-PHY model 時，M31 model 輸出的是 PPI 介面，不是最終
+parallel video port。請先把 M31 的 PPI output 接到設計裡的 MIPI RX
+controller，再將這些 checker wire 接到 MIPI RX controller 的平行輸出，例如：
 
 ```verilog
-assign rx_pxclk = u_m31.PXCLK;
-assign rx_vsync = u_m31.VSYNC;
-assign rx_hsync = u_m31.HSYNC;
-assign rx_stb   = u_m31.STB;
-assign rx_data  = u_m31.DATA;
+assign rx_pxclk = u_mipi_rx_controller.PXCLK;
+assign rx_vsync = u_mipi_rx_controller.VSYNC;
+assign rx_hsync = u_mipi_rx_controller.HSYNC;
+assign rx_stb   = u_mipi_rx_controller.STB;
+assign rx_data  = u_mipi_rx_controller.DATA;
 ```
 
 比對器假設 `Stb` 高 = 該 Pxclk 有有效像素、`Vsync/Hsync` 前緣分別代表
@@ -532,9 +566,10 @@ testbench 的 `+define` 旋鈕：`FMT`(8/10/12/14)、`YUV`(0/1)、`SPEED`(Mbps)�
 1. 在 `tb_mipi_tx_dphy.v` 中，把 `mipi_rx_dphy_stub` (U_RX) 換成 M31 的
    instance；Tx 端 pad 名稱為 `PAD_CDTX_L0P/N … L4P/N`，對接 M31 Rx 端
    `PAD_CDRX_L0P/N … L4P/N`。
-2. 把第 7 節的 `rx_*` 預留 wire 接到 M31 的平行輸出。
-3. 視 M31 規格調整：`LANE_SPEED_MBPS`（時序會自動推算）、CSI-2 framing、
+2. 將 M31 Rx D-PHY model 的 PPI output 接到自己的 MIPI RX controller。
+3. 把第 7 節的 `rx_*` 預留 wire 接到 MIPI RX controller 的平行輸出。
+4. 視 M31 規格調整：`LANE_SPEED_MBPS`（時序會自動推算）、CSI-2 framing、
    以及比對器的極性參數。
-4. 重新 `make` 執行比對。
+5. 重新 `make` 執行比對。
 
 > `mipi_rx_dphy_stub.v` 僅供整條鏈路自我測試使用，不代表 M31 的實際行為。

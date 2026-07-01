@@ -2,10 +2,25 @@
 
 | 版本   | 日期       | 說明 |
 |--------|------------|------|
+| v1.2.0 | 2026-06-30 | 新增 `PACKET_INTERVAL_NS`，可調整 CSI-2 packet 間 LP-11 gap，包含 FS/FE short packet。 |
 | v1.1.0 | 2026-06-02 | 時序由 lane speed 自動推算；新增 YUV422 8/10-bit。 |
 | v1.0.0 | 2026-06-02 | 首次釋出。 |
 
 ---
+
+## v1.2.0 (2026-06-30)
+
+### 新增
+
+- **Packet interval**：Tx 新增 `PACKET_INTERVAL_NS` parameter，單位 ns。
+  模型會在 CSI-2 packet 完成並回到 LP-11 後、下一個 packet 開始前插入額外 gap。
+  此間隔套用於 FS short packet、每條 image line long packet、FE short packet 之間；
+  default `0` 表示維持既有連續送 packet 的行為。
+
+### 注意
+
+- `LANE_SPEED_MBPS` 仍只負責 D-PHY UI 與 HS entry/exit timing 的自動推算；
+  `PACKET_INTERVAL_NS` 是 packet-to-packet idle gap，不屬於 D-PHY spec 最小時序推算。
 
 ## v1.1.0 (2026-06-02)
 

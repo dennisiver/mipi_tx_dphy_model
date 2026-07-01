@@ -19,20 +19,21 @@
 //
 //  This is a *simulation model*, not synthesizable RTL.
 //
-//  TIMING: the user only sets LANE_SPEED_MBPS.  The unit interval (UI) and all
-//  D-PHY HS entry/exit intervals are derived automatically from the lane speed
-//  using the MIPI D-PHY spec relations (see localparams below), then rounded
-//  up to a whole UI so the data bit grid stays aligned to the DDR clock edges.
+//  TIMING: the unit interval (UI) and all D-PHY HS entry/exit intervals are
+//  derived automatically from LANE_SPEED_MBPS using the MIPI D-PHY spec
+//  relations (see localparams below), then rounded up to a whole UI so the data
+//  bit grid stays aligned to the DDR clock edges.
 //============================================================================
 `timescale 1ps/1ps
 
 module mipi_tx_dphy_model #(
-    // ---- line rate (the ONE timing knob) ---------------------------------
+    // ---- line rate -------------------------------------------------------
     parameter integer LANE_SPEED_MBPS = 2500,  // per-lane HS bit rate, <= 2500
     // ---- frame / packet configuration ------------------------------------
     parameter integer LANE_NUM        = 4,      // active data lanes: 1, 2, or 4
     parameter integer HSIZE           = 64,     // active pixels per line
     parameter integer VSIZE           = 8,      // active lines per frame
+    parameter integer PACKET_INTERVAL_NS = 0,   // LP-11 gap between CSI-2 packets, including FS/FE short packets
     parameter [7:0]   DATA_TYPE       = 8'h2B,  // 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x2D RAW14
     parameter integer PATTERN_SEL     = 0,      // 0..5 (see golden_pixel.v)
     parameter integer SOLID_VAL       = 14'h03AA,
@@ -145,8 +146,14 @@ module mipi_tx_dphy_model #(
     integer    lane_skew [0:3];
     reg        clk_hs_active;
 
-    `include "mipi_csi2_func.v"
-    `include "golden_pixel.v"
+    `ifndef MIPI_CSI2_FUNC_INC
+        `define MIPI_CSI2_FUNC_INC "mipi_csi2_func.v"
+    `endif
+    `ifndef GOLDEN_PIXEL_INC
+        `define GOLDEN_PIXEL_INC "golden_pixel.v"
+    `endif
+    `include `MIPI_CSI2_FUNC_INC
+    `include `GOLDEN_PIXEL_INC
 
     // ----- format helpers -------------------------------------------------
     //  dt_bits : sample bit-width.  dt_spp : samples per pixel.
@@ -332,20 +339,20 @@ module mipi_tx_dphy_model #(
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p2 = golden_pixel(frame,row,(c+2)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p3 = golden_pixel(frame,row,(c+3)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    pkt[b  ] = p0[7:0];
-                    pkt[b+1] = p1[7:0];
-                    pkt[b+2] = p2[7:0];
-                    pkt[b+3] = p3[7:0];
-                    pkt[b+4] = {p3[9:8], p2[9:8], p1[9:8], p0[9:8]};
+                    pkt[b  ] = p0[9:2];
+                    pkt[b+1] = p1[9:2];
+                    pkt[b+2] = p2[9:2];
+                    pkt[b+3] = p3[9:2];
+                    pkt[b+4] = {p3[1:0], p2[1:0], p1[1:0], p0[1:0]};
                     b = b + 5;
                 end
             end else if (cfg_bits == 12) begin
                 for (c = 0; c < cfg_spl; c = c + 2) begin
                     p0 = golden_pixel(frame,row,c,    cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p1 = golden_pixel(frame,row,c + 1,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    pkt[b  ] = p0[7:0];
-                    pkt[b+1] = p1[7:0];
-                    pkt[b+2] = {p1[11:8], p0[11:8]};
+                    pkt[b  ] = p0[11:4];
+                    pkt[b+1] = p1[11:4];
+                    pkt[b+2] = {p1[3:0], p0[3:0]};
                     b = b + 3;
                 end
             end else begin // 14-bit
@@ -354,13 +361,13 @@ module mipi_tx_dphy_model #(
                     p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p2 = golden_pixel(frame,row,c + 2,cfg_h,cfg_pat,cfg_bits,cfg_solid);
                     p3 = golden_pixel(frame,row,c + 3,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    pkt[b  ] = p0[7:0];
-                    pkt[b+1] = p1[7:0];
-                    pkt[b+2] = p2[7:0];
-                    pkt[b+3] = p3[7:0];
-                    pkt[b+4] = {p1[9:8],  p0[13:8]};
-                    pkt[b+5] = {p2[11:8], p1[13:10]};
-                    pkt[b+6] = {p3[13:8], p2[13:12]};
+                    pkt[b  ] = p0[13:6];
+                    pkt[b+1] = p1[13:6];
+                    pkt[b+2] = p2[13:6];
+                    pkt[b+3] = p3[13:6];
+                    pkt[b+4] = {p1[1:0], p0[5:0]};
+                    pkt[b+5] = {p2[3:0], p1[5:2]};
+                    pkt[b+6] = {p3[5:0], p2[5:4]};
                     b = b + 7;
                 end
             end
@@ -378,6 +385,12 @@ module mipi_tx_dphy_model #(
         end
     endtask
 
+    task packet_interval;
+        begin
+            if (PACKET_INTERVAL_NS > 0) #(PACKET_INTERVAL_NS * 1000);
+        end
+    endtask
+
     // ----- one complete frame --------------------------------------------
     task send_frame;
         input [31:0] fnum;
@@ -389,10 +402,14 @@ module mipi_tx_dphy_model #(
                     #(T_CLK_PRE_PS);                 // let the clock reach HS
                     if (cfg_skew) send_skew_cal;
                     build_short(DT_FS, fnum[15:0]);  send_packet;
+                    packet_interval;
+                    $display("[tx][flow] %0t FRAME_START_SENT frame=%0d vc=%0d", $time, fnum, VC);
                     for (r = 0; r < cfg_v; r = r + 1) begin
                         build_line(fnum, r);         send_packet;
+                        packet_interval;
                     end
                     build_short(DT_FE, fnum[15:0]);  send_packet;
+                    $display("[tx][flow] %0t FRAME_END_SENT frame=%0d vc=%0d", $time, fnum, VC);
                     #(T_FRAME_GAP_PS);
                     clk_hs_active = 1'b0;             // stop clock lane
                 end
@@ -484,9 +501,14 @@ module mipi_tx_dphy_model #(
             $display("[tx] CONFIG ERROR: LANE_SPEED_MBPS=%0d out of range (1..2500 Mbps)", LANE_SPEED_MBPS);
             $finish;
         end
-        $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d (ps)",
+        if (PACKET_INTERVAL_NS < 0) begin
+            $display("[tx] CONFIG ERROR: PACKET_INTERVAL_NS=%0d must be >= 0", PACKET_INTERVAL_NS);
+            $finish;
+        end
+        $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d packet_interval=%0d (ns)",
                  LANE_SPEED_MBPS, UI_PS, T_LPX_PS, T_HS_PREP_PS, T_HS_ZERO_PS,
-                 T_HS_TRAIL_PS, T_CLK_PREP_PS, T_CLK_ZERO_PS, T_CLK_TRAIL_PS);
+                 T_HS_TRAIL_PS, T_CLK_PREP_PS, T_CLK_ZERO_PS, T_CLK_TRAIL_PS,
+                 PACKET_INTERVAL_NS);
     end
 
     always @(negedge rst_n) begin
@@ -513,12 +535,26 @@ module mipi_tx_dphy_model #(
             cfg_spl   = cfg_h * dt_spp(DATA_TYPE);
             check_config;                            // stop on illegal setup
             busy      = 1'b1;
-            $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=0x%02h (%0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
-                     $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+            case (cfg_dt)
+                DT_YUV8 : $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=YUV422-8 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                DT_YUV10: $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=YUV422-10 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                DT_RAW8 : $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=RAW8 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                DT_RAW10: $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=RAW10 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                DT_RAW12: $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=RAW12 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                DT_RAW14: $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=RAW14 (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+                default : $display("[tx] %0t START  %0dMbps (UI=%0dps)  lanes=%0d  %0dx%0d  DT=UNKNOWN (0x%02h, %0d-bit)  pattern=%0d  frames=%0d  skew_cal=%0b",
+                                    $time, LANE_SPEED_MBPS, UI_PS, LANE_NUM, cfg_h, cfg_v, cfg_dt, cfg_bits, cfg_pat, cfg_nf, cfg_skew);
+            endcase
             for (fi = 0; fi < cfg_nf; fi = fi + 1) begin
-                send_frame(fi[31:0]);
+                send_frame(fi[31:0] + 1);
                 frame_done = 1'b1; #(1); frame_done = 1'b0;
-                $display("[tx] %0t frame %0d done", $time, fi);
+                $display("[tx] %0t frame %0d done", $time, fi + 1);
             end
             idle_all;
             busy = 1'b0;

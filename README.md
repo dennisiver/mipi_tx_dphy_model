@@ -4,7 +4,8 @@
 **M31 MIPI Rx D-PHY model**。
 
 - 1 / 2 / 4 active data lane + 1 clock lane，連續時脈 HS 模式，最高 **2.5 Gbps/lane**
-- **只需設定 `LANE_SPEED_MBPS`**，UI 與所有 D-PHY 時序自動依 spec 推算
+- `LANE_SPEED_MBPS` 控制 lane speed；UI 與所有 D-PHY 時序自動依 spec 推算
+- `PACKET_INTERVAL_NS` 可設定 CSI-2 packet 間 LP-11 gap，包含 FS/FE short packet
 - 最大 **8K**（Hsize × Vsize 可調）、RAW8 / RAW10 / RAW12 / RAW14、YUV422 8/10-bit
 - **Skew calibration**：per-lane skew 注入 + deskew calibration burst
 - 多種內建 golden pattern + `golden_pattern.txt` 載入，位元數依格式自動選擇

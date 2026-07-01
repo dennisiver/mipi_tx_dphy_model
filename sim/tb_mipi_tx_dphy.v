@@ -80,6 +80,7 @@ module tb_mipi_tx_dphy;
     wire        rx_vsync;
     wire        rx_hsync;
     wire        rx_stb;
+    wire [1:0]  rx_vc;
     wire [13:0] rx_data;
 
     // ------------------------------------------------------------------ Tx
@@ -112,7 +113,8 @@ module tb_mipi_tx_dphy;
     mipi_rx_dphy_stub #(
         .LANE_SPEED_MBPS (SPEED),
         .LANE_NUM        (`LANE_NUM),
-        .DATA_BITS       (`FMT)
+        .DATA_BITS       (`FMT),
+        .EXPECT_FRAME_LINES(`VS)
     ) U_RX (
         .PAD_CDRX_L0P(L0P), .PAD_CDRX_L0N(L0N),
         .PAD_CDRX_L1P(L1P), .PAD_CDRX_L1N(L1N),
@@ -120,7 +122,7 @@ module tb_mipi_tx_dphy;
         .PAD_CDRX_L3P(L3P), .PAD_CDRX_L3N(L3N),
         .PAD_CDRX_L4P(L4P), .PAD_CDRX_L4N(L4N),
         .Pxclk(rx_pxclk), .Vsync(rx_vsync), .Hsync(rx_hsync),
-        .Stb(rx_stb), .Data(rx_data)
+        .Stb(rx_stb), .VC(rx_vc), .Data(rx_data)
     );
 
     // ------------------------------------------------------------- checker
@@ -130,6 +132,8 @@ module tb_mipi_tx_dphy;
         .PATTERN (`PAT),
         .SOLID   (SOLID_PATTERN),
         .GP_FILE (`GP_FILE),
+        .VSYNC_ACT(1'b0),
+        .HSYNC_ACT(1'b0),
         .VERBOSE (1)
     ) U_CHK (
         .rst_n      (rst_n),
