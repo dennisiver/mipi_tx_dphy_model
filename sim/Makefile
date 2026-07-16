@@ -8,6 +8,8 @@
 #     make PAT=5 GP_FILE=patterns/my_golden_pattern.txt
 #     make LANE_NUM=2      # active data lanes: 1, 2, or 4
 #     make SPEED=1500       # 1.5 Gbps/lane (D-PHY timing auto-derived)
+#     make VBLANK=1000      # add 1000 ns after FE before next FS
+#     make PACKET_INTERVAL=2000  # set the gap between CSI-2 packets in ns
 #     make SKEW=1           # enable per-lane skew injection + deskew calibration
 #     make wave             # run and open the VCD in gtkwave
 #     make matrix           # run a small regression matrix
@@ -23,6 +25,8 @@
 #     GP_FILE : file path used when PAT=5
 #     LANE_NUM : 1 | 2 | 4 active data lanes
 #     NF    : number of frames
+#     VBLANK: extra gap after FE before next FS, in ns
+#     PACKET_INTERVAL: gap between CSI-2 packets, in ns
 #     SKEW  : 0 | 1  enable skew injection + deskew calibration
 #============================================================================
 IVERILOG ?= iverilog
@@ -45,10 +49,14 @@ PAT   ?= 0
 GP_FILE ?= golden_pattern.txt
 LANE_NUM ?= 4
 NF    ?= 2
+PACKET_INTERVAL ?= 2000
+VBLANK ?= 10000
 SKEW  ?= 0
 
 DEFS := -D FMT=$(FMT) -D YUV=$(YUV) -D SPEED=$(SPEED) -D HS=$(HS) -D VS=$(VS) \
-        -D PAT=$(PAT) -D GP_FILE=\"$(GP_FILE)\" -D LANE_NUM=$(LANE_NUM) -D NF=$(NF) -D SKEW=$(SKEW)
+        -D PAT=$(PAT) -D GP_FILE=\"$(GP_FILE)\" -D LANE_NUM=$(LANE_NUM) -D NF=$(NF) \
+        -D PACKET_INTERVAL=$(PACKET_INTERVAL) \
+        -D VBLANK=$(VBLANK) -D SKEW=$(SKEW)
 OUT  := tb.vvp
 
 # Run the model from the repository root so golden_pattern.txt is found.

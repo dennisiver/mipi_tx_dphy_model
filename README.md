@@ -1,5 +1,10 @@
 # mipi_tx_dphy_model
 
+Timing knobs:
+- `PACKET_INTERVAL_NS`: extra LP-11 gap between CSI-2 packets, in ns. Default: `2000`.
+- `VBLANK_NS`: extra LP-11 gap after FE before the next FS, in ns. Default: `10000`.
+- Example: `make VBLANK=1000` adds 1000 ns after FE before the next FS.
+
 以 Verilog 建立的 **MIPI Tx D-PHY 行為模型**，用來驅動並驗證
 **M31 MIPI Rx D-PHY model**。
 

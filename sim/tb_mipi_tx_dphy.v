@@ -11,7 +11,7 @@
 //  and re-route the "reserved" parallel wires below to the M31 output ports.
 //
 //  Configuration is selected with the +defines below, e.g.:
-//      iverilog ... -DFMT=10 -DHS=64 -DVS=8 -DPAT=0 -DSKEW=1
+//      iverilog ... -DFMT=10 -DHS=64 -DVS=8 -DPAT=0 -DSKEW=1 -DVBLANK=1000
 //============================================================================
 `timescale 1ps/1ps
 
@@ -32,6 +32,12 @@
 `endif
 `ifndef SKEW
  `define SKEW 0          // 1 = enable deskew calibration + lane skew injection
+`endif
+`ifndef VBLANK
+ `define VBLANK 10000    // extra gap after FE before next FS, in ns
+`endif
+`ifndef PACKET_INTERVAL
+ `define PACKET_INTERVAL 2000 // gap between CSI-2 packets, in ns
 `endif
 `ifndef SPEED
  `define SPEED 2500      // per-lane HS bit rate in Mbps (timing auto-derived)
@@ -89,10 +95,12 @@ module tb_mipi_tx_dphy;
         .LANE_NUM        (`LANE_NUM),
         .HSIZE           (`HS),
         .VSIZE           (`VS),
+        .PACKET_INTERVAL_NS(`PACKET_INTERVAL),
         .DATA_TYPE       (DT),
         .PATTERN_SEL     (`PAT),
         .SOLID_VAL       (SOLID_PATTERN),
         .NUM_FRAMES      (`NF),
+        .VBLANK_NS       (`VBLANK),
         .SKEW_CAL_EN     (`SKEW),
         .SKEW_L0_PS (SK0), .SKEW_L1_PS (SK1),
         .SKEW_L2_PS (SK2), .SKEW_L3_PS (SK3),
@@ -151,6 +159,10 @@ module tb_mipi_tx_dphy;
     initial begin
         if ((SPEED <= 0) || (SPEED > 2500)) begin
             $display("[tb] CONFIG ERROR: SPEED must be in range 1..2500 Mbps (got %0d)", SPEED);
+            $fatal(1);
+        end
+        if (`VBLANK < 0) begin
+            $display("[tb] CONFIG ERROR: VBLANK must be >= 0 ns (got %0d)", `VBLANK);
             $fatal(1);
         end
         if (`YUV && (`FMT != 8) && (`FMT != 10)) begin

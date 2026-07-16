@@ -1,5 +1,10 @@
 # MIPI Tx D-PHY Model 使用說明
 
+Timing knobs:
+- `PACKET_INTERVAL_NS`: extra LP-11 gap between CSI-2 packets, in ns. Default: `2000`.
+- `VBLANK_NS`: extra LP-11 gap after the FE short packet before the next FS short packet, in ns. Default: `10000`.
+- Example: `.VBLANK_NS(1000)` adds 1000 ns after FE before the next FS.
+
 本專案以 Verilog 建立一個 **MIPI Tx D-PHY 行為模型 (behavioural model)**，
 用來驅動並驗證 **M31 MIPI Rx D-PHY model**。
 
@@ -86,7 +91,7 @@ mipi_tx_dphy_model #(
     .LANE_NUM       (4),     // active data lanes: 1 / 2 / 4
     .HSIZE          (64),    // 每行像素數（最大 7680）
     .VSIZE          (8),     // 每張影像行數（最大 4320）
-    .PACKET_INTERVAL_NS(0),  // CSI-2 packet 間的 LP-11 gap，單位 ns；包含 FS/FE short packet
+    .PACKET_INTERVAL_NS(2000),  // CSI-2 packet 間的 LP-11 gap，單位 ns；包含 FS/FE short packet
     .DATA_TYPE      (8'h2B), // 見下方 data type 表
     .PATTERN_SEL    (0),     // 0..5（見第 5 節）
     .SOLID_VAL      (14'h03AA),
@@ -111,7 +116,7 @@ mipi_tx_dphy_model #(
 | `LANE_NUM`          | 4       | active data lane 數，支援 1 / 2 / 4             |
 | `HSIZE`             | 64      | 每行 active pixel 數（最大 7680）               |
 | `VSIZE`             | 8       | 每張 frame active line 數（最大 4320）          |
-| `PACKET_INTERVAL_NS`| 0       | CSI-2 packet 之間額外插入的 LP-11 gap，單位 ns；會套用在 FS short packet、每條 image line long packet、FE short packet 之間 |
+| `PACKET_INTERVAL_NS`| 2000    | CSI-2 packet 之間額外插入的 LP-11 gap，單位 ns；會套用在 FS short packet、每條 image line long packet、FE short packet 之間 |
 | `DATA_TYPE`         | 0x2B    | CSI-2 data type：RAW8 / RAW10 / RAW12 / RAW14 / YUV422 |
 | `PATTERN_SEL`       | 0       | golden pattern 選擇（0..5）                     |
 | `SOLID_VAL`         | 0x3AA   | `PATTERN_SEL=4` 時使用的固定 sample 值          |
@@ -132,7 +137,7 @@ MIPI D-PHY spec 推算最佳（spec 最小）值**，並向上取整成整數個
 `PACKET_INTERVAL_NS` 是 CSI-2 packet 間的額外 idle gap，單位為 ns。模型內部
 `timescale` 是 `1ps/1ps`，因此會自動乘以 1000 轉成 ps delay。此 gap 不是
 D-PHY HS entry/exit spec timing 的一部分；它是在一個 packet 完成並回到 LP-11
-之後、下一個 packet 開始之前插入，default `0` 表示不額外等待。
+之後、下一個 packet 開始之前插入，default `2000` 表示額外等待 2000 ns。
 
 ```
 UI(ps) = 1,000,000 / LANE_SPEED_MBPS        例：2500 -> 400 ps

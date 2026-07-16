@@ -33,7 +33,8 @@ module mipi_tx_dphy_model #(
     parameter integer LANE_NUM        = 4,      // active data lanes: 1, 2, or 4
     parameter integer HSIZE           = 64,     // active pixels per line
     parameter integer VSIZE           = 8,      // active lines per frame
-    parameter integer PACKET_INTERVAL_NS = 0,   // LP-11 gap between CSI-2 packets, including FS/FE short packets
+    parameter integer PACKET_INTERVAL_NS = 2000, // LP-11 gap between CSI-2 packets, including FS/FE short packets
+    parameter integer VBLANK_NS       = 10000,  // extra LP-11 gap after FE before the next frame FS
     parameter [7:0]   DATA_TYPE       = 8'h2B,  // 0x2A RAW8, 0x2B RAW10, 0x2C RAW12, 0x2D RAW14
     parameter integer PATTERN_SEL     = 0,      // 0..5 (see golden_pixel.v)
     parameter integer SOLID_VAL       = 14'h03AA,
@@ -391,6 +392,12 @@ module mipi_tx_dphy_model #(
         end
     endtask
 
+    task vblank_interval;
+        begin
+            if (VBLANK_NS > 0) #(VBLANK_NS * 1000);
+        end
+    endtask
+
     // ----- one complete frame --------------------------------------------
     task send_frame;
         input [31:0] fnum;
@@ -410,6 +417,7 @@ module mipi_tx_dphy_model #(
                     end
                     build_short(DT_FE, fnum[15:0]);  send_packet;
                     $display("[tx][flow] %0t FRAME_END_SENT frame=%0d vc=%0d", $time, fnum, VC);
+                    vblank_interval;
                     #(T_FRAME_GAP_PS);
                     clk_hs_active = 1'b0;             // stop clock lane
                 end
@@ -505,10 +513,14 @@ module mipi_tx_dphy_model #(
             $display("[tx] CONFIG ERROR: PACKET_INTERVAL_NS=%0d must be >= 0", PACKET_INTERVAL_NS);
             $finish;
         end
-        $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d packet_interval=%0d (ns)",
+        if (VBLANK_NS < 0) begin
+            $display("[tx] CONFIG ERROR: VBLANK_NS=%0d must be >= 0", VBLANK_NS);
+            $finish;
+        end
+        $display("[tx] auto timing @ %0dMbps: UI=%0d LPX=%0d HS_PREP=%0d HS_ZERO=%0d HS_TRAIL=%0d CLK_PREP=%0d CLK_ZERO=%0d CLK_TRAIL=%0d packet_interval=%0d vblank=%0d (ns)",
                  LANE_SPEED_MBPS, UI_PS, T_LPX_PS, T_HS_PREP_PS, T_HS_ZERO_PS,
                  T_HS_TRAIL_PS, T_CLK_PREP_PS, T_CLK_ZERO_PS, T_CLK_TRAIL_PS,
-                 PACKET_INTERVAL_NS);
+                 PACKET_INTERVAL_NS, VBLANK_NS);
     end
 
     always @(negedge rst_n) begin
