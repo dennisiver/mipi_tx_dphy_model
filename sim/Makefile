@@ -11,8 +11,10 @@
 #     make VBLANK=1000      # add 1000 ns after FE before next FS
 #     make PACKET_INTERVAL=2000  # set the gap between CSI-2 packets in ns
 #     make SKEW=1           # enable per-lane skew injection + deskew calibration
+#     make PPM=1            # dump every received frame as P3 PPM
 #     make wave             # run and open the VCD in gtkwave
 #     make matrix           # run a small regression matrix
+#     make lp               # verify LPDT command/data, BTA, and ULPS handling
 #     make clean
 #
 #  Knobs (passed as -D defines to the testbench):
@@ -23,11 +25,15 @@
 #     VS    : Vsize (active lines per frame)
 #     PAT   : 0..5 golden pattern (0 ramp,1 hgrad,2 vgrad,3 checker,4 solid,5 file)
 #     GP_FILE : file path used when PAT=5
+#     GP_MAX  : max number of values read from GP_FILE (must be >= its line count)
 #     LANE_NUM : 1 | 2 | 4 active data lanes
 #     NF    : number of frames
 #     VBLANK: extra gap after FE before next FS, in ns
 #     PACKET_INTERVAL: gap between CSI-2 packets, in ns
 #     SKEW  : 0 | 1  enable skew injection + deskew calibration
+#     PPM   : 0 | 1  dump received frames as P3 PPM files
+#     RAW   : 0 | 1  dump received frames as raw .fmt sample files
+#     DUMP  : 0 | 1  write the VCD (turn off for large frames)
 #============================================================================
 IVERILOG ?= iverilog
 VVP      ?= vvp
@@ -47,22 +53,27 @@ HS    ?= 64
 VS    ?= 8
 PAT   ?= 0
 GP_FILE ?= golden_pattern.txt
+GP_MAX  ?= 65536
 LANE_NUM ?= 4
 NF    ?= 2
 PACKET_INTERVAL ?= 2000
 VBLANK ?= 10000
 SKEW  ?= 0
+PPM   ?= 0
+RAW   ?= 0
+DUMP  ?= 1
 
 DEFS := -D FMT=$(FMT) -D YUV=$(YUV) -D SPEED=$(SPEED) -D HS=$(HS) -D VS=$(VS) \
-        -D PAT=$(PAT) -D GP_FILE=\"$(GP_FILE)\" -D LANE_NUM=$(LANE_NUM) -D NF=$(NF) \
+        -D PAT=$(PAT) -D GP_FILE=\"$(GP_FILE)\" -D GP_MAX=$(GP_MAX) -D LANE_NUM=$(LANE_NUM) -D NF=$(NF) \
         -D PACKET_INTERVAL=$(PACKET_INTERVAL) \
-        -D VBLANK=$(VBLANK) -D SKEW=$(SKEW)
+        -D VBLANK=$(VBLANK) -D SKEW=$(SKEW) -D PPM=$(PPM) -D RAW=$(RAW) -D DUMP=$(DUMP)
 OUT  := tb.vvp
+LP_OUT := tb_lp.vvp
 
 # Run the model from the repository root so golden_pattern.txt is found.
 RUNDIR := $(TOP_DIR)
 
-.PHONY: all run wave matrix clean
+.PHONY: all run wave matrix lp clean
 all: run
 
 $(OUT): $(SRCS)
@@ -73,6 +84,10 @@ run: $(OUT)
 
 wave: run
 	gtkwave $(RUNDIR)/tb_mipi_tx_dphy.vcd &
+
+lp: mipi_rx_dphy_stub.v tb_mipi_rx_dphy_lp.v
+	$(IVERILOG) -g2012 -o $(LP_OUT) mipi_rx_dphy_stub.v tb_mipi_rx_dphy_lp.v
+	cd $(RUNDIR) && $(VVP) $(CURDIR)/$(LP_OUT)
 
 matrix:
 	@echo "--- RAW (FMT 8/10/12/14) x patterns 0..5 ---"; \
@@ -93,4 +108,6 @@ matrix:
 	done
 
 clean:
-	rm -f $(OUT) *.vvp $(RUNDIR)/tb_mipi_tx_dphy.vcd
+	rm -f $(OUT) $(LP_OUT) *.vvp $(RUNDIR)/tb_mipi_tx_dphy.vcd \
+		$(RUNDIR)/mipi_lp_data.txt $(RUNDIR)/mipi_lp_data_test.txt \
+		$(RUNDIR)/rx_frame_*.ppm

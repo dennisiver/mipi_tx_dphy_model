@@ -51,11 +51,24 @@
 `ifndef LANE_NUM
  `define LANE_NUM 4
 `endif
+`ifndef GP_MAX
+ `define GP_MAX 65536   // must be >= number of values in GP_FILE
+`endif
+`ifndef DUMP
+ `define DUMP 1         // 0 = skip the VCD dump (large frames make huge files)
+`endif
+`ifndef PPM
+ `define PPM 0          // 1 = dump every received frame as P3 PPM
+`endif
+`ifndef RAW
+ `define RAW 0          // 1 = dump raw Rx samples as rx_frame_NNNN.fmt
+`endif
 
 module tb_mipi_tx_dphy;
 
     localparam integer SPEED = `SPEED;          // per-lane Mbps
     localparam integer UI_PS = (SPEED <= 0) ? 400 : (1000000 / SPEED); // derived UI (for skew reference)
+    localparam integer PXCLK_PERIOD_PS = (SPEED <= 0) ? 3200 : (8000000 / SPEED);
     localparam integer EXP_SAMPLES_PER_LINE = (`YUV) ? (2 * `HS) : `HS;
     localparam integer EXP_FRAMES = (`NF == 0) ? 1 : `NF;
     localparam integer EXP_PIXELS = EXP_SAMPLES_PER_LINE * `VS * EXP_FRAMES;
@@ -75,6 +88,7 @@ module tb_mipi_tx_dphy;
 
     reg         rst_n;
     reg         trigger;
+    time        pxclk_first_rise;
 
     // ---- the 5 differential lanes (P/N, 3-bit digital encoding) ----------
     wire [2:0] L0P,L0N, L1P,L1N, L2P,L2N, L3P,L3N, L4P,L4N;
@@ -88,6 +102,18 @@ module tb_mipi_tx_dphy;
     wire        rx_stb;
     wire [1:0]  rx_vc;
     wire [13:0] rx_data;
+
+    initial begin
+        @(posedge rx_pxclk);
+        pxclk_first_rise = $time;
+        @(posedge rx_pxclk);
+        if (($time - pxclk_first_rise < PXCLK_PERIOD_PS - 1) ||
+            ($time - pxclk_first_rise > PXCLK_PERIOD_PS + 1)) begin
+            $display("[tb] ERROR: Rx Pxclk period=%0t ps, expected about %0d ps (lane speed / 8)",
+                     $time - pxclk_first_rise, PXCLK_PERIOD_PS);
+            $fatal(1);
+        end
+    end
 
     // ------------------------------------------------------------------ Tx
     mipi_tx_dphy_model #(
@@ -104,6 +130,7 @@ module tb_mipi_tx_dphy;
         .SKEW_CAL_EN     (`SKEW),
         .SKEW_L0_PS (SK0), .SKEW_L1_PS (SK1),
         .SKEW_L2_PS (SK2), .SKEW_L3_PS (SK3),
+        .GP_MAX     (`GP_MAX),
         .GP_FILE    (`GP_FILE)
     ) U_TX (
         .rst_n      (rst_n),
@@ -137,12 +164,18 @@ module tb_mipi_tx_dphy;
     mipi_rx_checker #(
         .BITS    (`FMT),
         .HSIZE   (`HS),
+        .VSIZE   (`VS),
+        .YUV     (`YUV),
         .PATTERN (`PAT),
         .SOLID   (SOLID_PATTERN),
+        .GP_MAX  (`GP_MAX),
         .GP_FILE (`GP_FILE),
         .VSYNC_ACT(1'b0),
         .HSYNC_ACT(1'b0),
-        .VERBOSE (1)
+        .VERBOSE (1),
+        .PPM_EN  (`PPM),
+        .RAW_EN  (`RAW),
+        .PPM_PREFIX("rx")
     ) U_CHK (
         .rst_n      (rst_n),
         .pxclk      (rx_pxclk),
@@ -181,8 +214,10 @@ module tb_mipi_tx_dphy;
 
     // -------------------------------------------------------- stimulus ----
     initial begin
-        $dumpfile("tb_mipi_tx_dphy.vcd");
-        $dumpvars(0, tb_mipi_tx_dphy);
+        if (`DUMP) begin
+            $dumpfile("tb_mipi_tx_dphy.vcd");
+            $dumpvars(0, tb_mipi_tx_dphy);
+        end
 
         rst_n       = 1'b0;
         trigger     = 1'b0;
@@ -193,11 +228,13 @@ module tb_mipi_tx_dphy;
         #20000 trigger = 1'b1;
         $display("[tb] trigger asserted at %0t", $time);
 
-        // wait until the whole sequence is finished, then a margin to drain
+        // Wait for the byte-clocked Rx output to drain after transmission.
         wait (U_TX.busy === 1'b1);
         wait (U_TX.busy === 1'b0);
         trigger = 1'b0;
-        #2000000;            // allow the Rx FIFO to drain to the checker
+        wait (U_CHK.pixel_count >= EXP_PIXELS);
+        wait (U_RX.rptr == U_RX.wptr);
+        @(posedge rx_pxclk);
 
         U_CHK.report;
         if (U_CHK.pixel_count == 0) begin
@@ -213,6 +250,10 @@ module tb_mipi_tx_dphy;
             $display("[tb] ERROR: checker reported %0d mismatch(es)", U_CHK.error_count);
             $fatal(1);
         end
+        if (`PPM && U_CHK.ppm_error_count != 0) begin
+            $display("[tb] ERROR: PPM dump reported %0d error(s)", U_CHK.ppm_error_count);
+            $fatal(1);
+        end
         $finish;
     end
 
@@ -220,7 +261,7 @@ module tb_mipi_tx_dphy;
     initial begin
         #5000000000;        // 5 ms
         $display("[tb] WATCHDOG timeout");
-        $finish;
+        $fatal(1);
     end
 
 endmodule

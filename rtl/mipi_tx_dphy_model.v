@@ -8,7 +8,7 @@
 //      * up to 2.5 Gbps/lane
 //      * up to 8K frame size   (Hsize x Vsize programmable)
 //      * per-lane skew injection + deskew-calibration burst
-//      * RAW8 / RAW10 / RAW12 / RAW14 data formats (auto pixel bit-width)
+//      * RAW8 / RAW10 / RAW12 / RAW14 / YUV422 8/10-bit (auto pixel bit-width)
 //      * built-in golden patterns + golden_pattern.txt loader
 //      * input trigger gates the start of transmission
 //
@@ -331,15 +331,15 @@ module mipi_tx_dphy_model #(
             // Packing is selected by the sample bit-width (8/10/12/14).
             if (cfg_bits == 8) begin
                 for (c = 0; c < cfg_spl; c = c + 1) begin
-                    p0 = golden_pixel(frame,row,c,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,c,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b] = p0[7:0]; b = b + 1;
                 end
             end else if (cfg_bits == 10) begin
                 for (c = 0; c < cfg_spl; c = c + 4) begin
-                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p2 = golden_pixel(frame,row,(c+2)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p3 = golden_pixel(frame,row,(c+3)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p2 = golden_pixel(frame,row,(c+2)&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p3 = golden_pixel(frame,row,(c+3)&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b  ] = p0[9:2];
                     pkt[b+1] = p1[9:2];
                     pkt[b+2] = p2[9:2];
@@ -349,8 +349,8 @@ module mipi_tx_dphy_model #(
                 end
             end else if (cfg_bits == 12) begin
                 for (c = 0; c < cfg_spl; c = c + 2) begin
-                    p0 = golden_pixel(frame,row,c,    cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p1 = golden_pixel(frame,row,c + 1,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,c,    cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p1 = golden_pixel(frame,row,c + 1,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b  ] = p0[11:4];
                     pkt[b+1] = p1[11:4];
                     pkt[b+2] = {p1[3:0], p0[3:0]};
@@ -358,10 +358,10 @@ module mipi_tx_dphy_model #(
                 end
             end else begin // 14-bit
                 for (c = 0; c < cfg_spl; c = c + 4) begin
-                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p2 = golden_pixel(frame,row,c + 2,cfg_h,cfg_pat,cfg_bits,cfg_solid);
-                    p3 = golden_pixel(frame,row,c + 3,cfg_h,cfg_pat,cfg_bits,cfg_solid);
+                    p0 = golden_pixel(frame,row,(c  )&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p1 = golden_pixel(frame,row,(c+1)&16'hFFFF,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p2 = golden_pixel(frame,row,c + 2,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
+                    p3 = golden_pixel(frame,row,c + 3,cfg_spl,cfg_pat,cfg_bits,cfg_solid);
                     pkt[b  ] = p0[13:6];
                     pkt[b+1] = p1[13:6];
                     pkt[b+2] = p2[13:6];

@@ -232,7 +232,7 @@ Frame End    (short packet, DT=0x01)
 
 | PATTERN_SEL | 名稱              | 內容                                   |
 |-------------|-------------------|----------------------------------------|
-| 0           | sequential / ramp | 連續遞增值 `(row*hsize + col + frame)` |
+| 0           | sequential / ramp | 連續遞增值 `(row*samples_per_line + col + frame)` |
 | 1           | horizontal gradient | 值隨欄位 `col` 變化                   |
 | 2           | vertical gradient | 值隨行 `row` 變化                      |
 | 3           | checkerboard      | 8×8 方格的滿格 / 0                      |
@@ -332,8 +332,9 @@ mipi_rx_checker #(
 
 - 每行一個 **十六進位** 值（`#` 開頭為註解、空白行會被略過）
 - 讀入後依資料格式自動遮罩到對應位元數
-- sample 索引依 `golden_pixel(frame,row,col,hsize,...)` 計算為 `row*hsize + col`；
-  YUV422 時 `col` 會跑遍 `2*Hsize`，因此 file pattern 會以 sample/component 為單位被取用
+- sample 索引依 `golden_pixel(frame,row,col,hsize,...)` 計算為 `row*hsize + col`，
+  其中 `hsize` 為**每行 sample 數**（RAW = `Hsize`，YUV422 = `2*Hsize`）；
+  YUV422 時檔案即依每行 `2*Hsize` 個 component（Cb,Y0,Cr,Y1,...）連續排列
 - 超出檔案長度時會循環取用，也就是 `index % loaded_count`
 
 範例：
@@ -578,3 +579,131 @@ testbench 的 `+define` 旋鈕：`FMT`(8/10/12/14)、`YUV`(0/1)、`SPEED`(Mbps)�
 5. 重新 `make` 執行比對。
 
 > `mipi_rx_dphy_stub.v` 僅供整條鏈路自我測試使用，不代表 M31 的實際行為。
+
+---
+
+## 10. Rx stub Low-Power / BTA / ULPS
+
+`mipi_rx_dphy_stub` 會在 data lane 0 辨識 D-PHY Control/Escape sequence：
+
+- Escape entry：`LP-11 -> LP-10 -> LP-00 -> LP-01 -> LP-00`
+- LPDT、ULPS、Reset 與 Trigger escape command（spaced-one-hot、LSB-first）
+- BTA request：`LP-11 -> LP-10 -> LP-00 -> LP-10 -> LP-00`
+- data lane 與 clock lane ULPS entry/exit；exit 的 `LP-10` Mark-1 必須滿足 `T_WAKEUP_PS`
+
+LPDT payload 的第一個 byte 會依 `LP_PROTOCOL` 顯示 CSI-2 或 DSI packet type；
+DSI DCS packet 的 command byte 也會顯示名稱。D-PHY LPDT 不帶上層協定標誌，
+所以 `LP_PROTOCOL=0` 的 AUTO 模式會同時列出 CSI-2/DSI 候選；需要唯一判讀時請指定：
+
+`LP_PROTOCOL` 也作用於 HS packet（每個 HS burst 只解第一個 packet；DSI 只解碼顯示，不輸出到平行介面；
+DCS Long Write 可另外寫成 PPM，見 10.1）：
+
+- `0=AUTO`：CSI-2 FS/FE/LS/LE 與 YUV/RAW 影像處理不變；其他 DT 以 DSI 名稱顯示
+  （`[rx_stub][hs][DSI]`，DCS packet 另印 `[rx_stub][hs][DSI-DCS]` command），取代 `ignored packet` WARNING。
+- `1=CSI-2`：非支援 DT 維持 `ignored packet` WARNING。
+- `2=DSI`：所有 HS packet 都以 DSI 解碼顯示，不做 CSI-2 frame/line 檢查，也不輸出影像。
+
+| Parameter | Default | 說明 |
+|-----------|---------|------|
+| `LP_PROTOCOL` | `0` | `0=AUTO`、`1=CSI-2`、`2=DSI`；LPDT 與 HS packet 共用 |
+| `LP_DATA_FILE` | `mipi_lp_data.txt` | 收到 LPDT 後建立的文字檔；每列含 time、transaction、byte index、hex data |
+| `LP_PHASE_PS` | `50000` | stub 回驅 BTA LP state 的 phase 時間 |
+| `T_TA_GO_PS` / `T_TA_SURE_PS` | `200000` / `100000` | BTA hand-off timing |
+| `BTA_AUTO_RETURN` | `1` | 收到 BTA、取得 reverse direction 後自動送 reverse BTA 並歸還 bus |
+| `BTA_HOLD_PS` | `200000` | reverse direction 保持 LP-11 的時間 |
+| `T_WAKEUP_PS` | `1000000000` | ULPS exit Mark-1 最短時間，預設 1 ms |
+| `STRICT_ULPS_WAKEUP` | `1` | `1` 時 T_WAKEUP 違規會 `$fatal` |
+
+stub 取得 BTA reverse direction 時會回驅 `LP-00 -> LP-10 -> LP-11`；若
+`BTA_AUTO_RETURN=1`，保持 `BTA_HOLD_PS` 後再送 Turnaround Request 並釋放 lane 0。
+若測試需要由 peripheral 傳回自訂 LP data，可設 `BTA_AUTO_RETURN=0`，由 testbench
+透過 hierarchy 控制或擴充 response stimulus。
+
+專用測試：
+
+```bash
+cd sim
+make lp
+```
+
+測試涵蓋 DSI DCS command、CSI-2 Data Type、LP data file、雙向 BTA，以及 data/clock lane ULPS。
+
+### 10.1 DSI RGB888 PPM dump
+
+stub 可以把 DSI HS 的 DCS Long Write（DT `0x39`）payload 當成 RGB888 影像 line，
+直接寫成 P3 PPM 檔。這個路徑不經過平行介面，所以不需要 `mipi_rx_checker`。
+`mipi_rx_checker` 的 `PPM_EN` / `RAW_EN` 對 DSI 沒有作用。
+
+| Parameter | Default | Plusarg | 說明 |
+|-----------|---------|---------|------|
+| `DSI_PPM_EN` | `0` | `+DSI_PPM=<0/1>` | `1` 時開啟 DSI PPM dump |
+| `DSI_HSIZE` | `0` | `+DSI_HSIZE=<n>` | 每條 line 的 pixel 數，範圍 1..21844 |
+| `DSI_VSIZE` | `0` | `+DSI_VSIZE=<n>` | 每張 frame 的 line 數，必須 > 0 |
+
+- 先載入 parameter，再讀 plusarg。有傳 plusarg 時，plusarg 優先；沒傳時保留 parameter 值。
+- 開啟後 HSIZE 或 VSIZE 超出範圍，或 `LP_PROTOCOL=1`（CSI-2），stub 會印 `CONFIG ERROR` 並 `$fatal`。
+- 輸出檔名：`dsi_rgb_frame_NNNN.ppm`（NNNN 從 0001 開始），寫在模擬的執行目錄。
+- 每個 pixel 佔 3 byte，依序是 R、G、B。
+
+stub 依 WC 判斷 payload 的格式：
+
+| WC | payload 格式 | frame 邊界 |
+|----|--------------|------------|
+| `3*HSIZE` | 全部是 pixel | 沒有開檔時開新 frame；收滿 `VSIZE` 條 line 時關檔 |
+| `3*HSIZE+1` | `payload[0]` 是 DCS command，pixel 從 `payload[1]` 開始 | `0x2C` 開新 frame；`0x3C` 接續目前的 frame |
+| 其他 | 不是影像 line | 已知 DCS command 只顯示名稱；其他值算 protocol error |
+
+- 有 command 時，`0x3C` 出現在第一個 `0x2C` 之前，該 line 會被丟掉，並印一次 WARNING。
+- frame 還沒收滿 `VSIZE` 條 line 就收到新的 `0x2C`，或模擬結束，stub 會印 `incomplete frame` ERROR。
+- WC 不符合時呼叫 `protocol_error`；`STRICT_PROTOCOL_FINISH=1` 時模擬會停止。
+
+使用範例（320×240 RGB888）：
+
+```verilog
+mipi_rx_dphy_stub #(
+    .LANE_SPEED_MBPS (600),
+    .LANE_NUM        (1),
+    .DSI_PPM_EN      (1),
+    .DSI_HSIZE       (320),
+    .DSI_VSIZE       (240)
+) U_RX_0 ( ... );
+```
+
+不改 testbench 時，也可以在 run command 加上 `+DSI_PPM=1 +DSI_HSIZE=320 +DSI_VSIZE=240`。
+
+預期 log：
+
+```
+[rx_stub][dsi_ppm] dumping frame 1 to dsi_rgb_frame_0001.ppm
+[rx_stub][dsi_ppm] completed frame 1: dsi_rgb_frame_0001.ppm
+```
+
+### 10.2 LP / HS raw byte dump
+
+stub 可以把收到的 byte 原樣寫成兩個文字檔，LP 和 HS 各一個。CSI-2 和 DSI 都適用。
+
+| Parameter | Default | Plusarg | 說明 |
+|-----------|---------|---------|------|
+| `RAW_DUMP_EN` | `0` | `+RAW_DUMP=<0/1>` | `1` 時開啟兩個 raw 檔 |
+| `RAW_LP_FILE` | `mipi_lp_raw.txt` | - | LPDT raw 檔名 |
+| `RAW_HS_FILE` | `mipi_hs_raw.txt` | - | HS raw 檔名 |
+
+- 檔案在模擬開始時建立。開檔失敗時印 `[rx_stub][raw] ERROR` 並 `$fatal`。
+- 每個 LPDT transaction 或每個 HS burst 寫一行，格式是 `序號 byte數 hex_byte...`，行首不寫時間。
+- LP 檔：一行是一個 LPDT transaction 的全部 byte，在 Escape exit 時寫出。
+  每個 transaction 最多存 `MAXBPL` 個 byte；超過時印 WARNING，只寫前 `MAXBPL` 個。
+- HS 檔：一行是一個 HS burst 在 sync byte（`B8`）之後的全部 byte，依 lane 合併後的順序排列，
+  包含 packet header、ECC、payload、CRC，以及同一 burst 內的後續 packet（例如 EoTp）。
+  stub 只解析每個 burst 的第一個 packet，但 raw 檔會寫出整個 burst。
+- `LP_DATA_FILE`（每個 byte 一行，含時間）不受影響，仍照原本方式產生。
+
+範例（DSI，320×240 RGB888，WC=961，1 lane）：
+
+```
+# MIPI D-PHY HS raw receive log (lane-merged burst after the sync byte)
+# burst bytes data_hex...
+1 967 39 c1 03 xx 2c 00 01 02 ...
+2 967 39 c1 03 xx 3c c0 c1 c2 ...
+```
+
+`967 = 4`（header）`+ 961`（payload）`+ 2`（CRC）。實際 byte 數以 burst 內容為準。

@@ -2,9 +2,101 @@
 
 | 版本   | 日期       | 說明 |
 |--------|------------|------|
+| v1.6.0 | 2026-11-04 | Rx stub 新增 LP / HS raw byte dump（`RAW_DUMP_EN`），LP 與 HS 分成兩個檔案。 |
+| v1.5.0 | 2026-11-03 | Rx stub DSI DCS Long Write 可寫成 RGB888 PPM；新增 `DSI_PPM_EN` / `DSI_HSIZE` / `DSI_VSIZE` parameter。 |
+| v1.4.1 | 2026-10-24 | 修正 YUV422 golden pattern 的行索引（PATTERN 0/5）。 |
+| v1.4.0 | 2026-09-15 | Rx stub HS 路徑新增 DSI data type / DCS command 解碼顯示。 |
+| v1.3.0 | 2026-08-05 | Rx stub 新增 LPDT/CSI-2/DSI command decode、LP data log、BTA 與 ULPS。 |
 | v1.2.0 | 2026-06-30 | 新增 `PACKET_INTERVAL_NS`，可調整 CSI-2 packet 間 LP-11 gap，包含 FS/FE short packet。 |
 | v1.1.0 | 2026-06-02 | 時序由 lane speed 自動推算；新增 YUV422 8/10-bit。 |
 | v1.0.0 | 2026-06-02 | 首次釋出。 |
+
+---
+
+## v1.6.0 (2026-11-04)
+
+### 新增
+
+- `mipi_rx_dphy_stub` 新增 parameter `RAW_DUMP_EN`、`RAW_LP_FILE`、`RAW_HS_FILE`，以及 plusarg `+RAW_DUMP`。
+- `RAW_LP_FILE`（預設 `mipi_lp_raw.txt`）：每個 LPDT transaction 寫一行，格式 `transaction bytes data_hex...`。
+- `RAW_HS_FILE`（預設 `mipi_hs_raw.txt`）：每個 HS burst 寫一行，格式 `burst bytes data_hex...`，
+  內容是 sync byte 之後依 lane 合併的全部 byte（header、ECC、payload、CRC，以及同一 burst 內的後續 packet）。
+- 行首不寫時間。
+
+### 注意
+
+- `RAW_DUMP_EN` 預設 `0`，沒有開啟的 testbench 行為不變，也不建立檔案。
+- `LP_DATA_FILE` 不受影響。
+- LP transaction 超過 `MAXBPL` byte 時只寫前 `MAXBPL` 個，並印 WARNING。
+
+---
+
+## v1.5.0 (2026-11-03)
+
+### 新增
+
+- `mipi_rx_dphy_stub` 把 DSI HS 的 DCS Long Write（DT `0x39`）payload 當成 RGB888 line，
+  寫成 `dsi_rgb_frame_NNNN.ppm`（P3）。依 WC 判斷格式：
+  `WC = 3*HSIZE` 代表 payload 全是 pixel；`WC = 3*HSIZE+1` 代表 `payload[0]` 是 DCS command，
+  `0x2C` 開新 frame，`0x3C` 接續目前的 frame。
+- 新增 parameter `DSI_PPM_EN`、`DSI_HSIZE`、`DSI_VSIZE`。testbench 可以直接在 instance 上開啟，
+  不需要改 run command。
+- 原有的 plusarg `+DSI_PPM`、`+DSI_HSIZE`、`+DSI_VSIZE` 保留，並覆蓋 parameter 值。
+
+### 注意
+
+- 三個 parameter 預設都是 `0`，沒有傳 parameter 或 plusarg 的 testbench 行為不變。
+- 開啟後 HSIZE / VSIZE 超出範圍時會 `$fatal`，與原本只用 plusarg 時相同。
+- DSI 影像不輸出到 Pxclk/Data，`mipi_rx_checker` 的 `PPM_EN` / `RAW_EN` 對 DSI 沒有作用；
+  DSI 也沒有 RAW dump。
+
+---
+
+## v1.4.1 (2026-10-24)
+
+### 修正
+
+- **YUV422 golden pattern 行索引**：`golden_pixel` 的 `hsize` 原本傳入 pixel 數，
+  但 YUV422 每行有 `2*Hsize` 個 sample，導致相鄰兩行的 sample 索引重疊一半。
+  Tx 與 `mipi_rx_checker` 改傳每行 sample 數（RAW = `Hsize`，YUV422 = `2*Hsize`），
+  `golden_pattern.txt` 可直接依每行 `2*Hsize` 個 component 排列。
+
+### 注意
+
+- RAW 格式行為不變。
+- YUV422 的 `PATTERN_SEL=0`（ramp）與 `5`（file）送出的值會與舊版不同；
+  Tx 與 checker 同步修改，自我比對結果不受影響。
+
+---
+
+## v1.4.0 (2026-09-15)
+
+### 新增
+
+- `mipi_rx_dphy_stub` HS packet 依 `LP_PROTOCOL` 解碼 DSI：`0=AUTO` 時非 CSI-2 影像 DT 以 DSI 名稱顯示
+  （取代 `ignored packet` WARNING）；`2=DSI` 時所有 HS packet 以 DSI 顯示；`1=CSI-2` 行為不變。
+- DCS Short Write / DCS Read / DCS Long Write 另外顯示 DCS command。
+- DSI type 表補上 pixel stream（RGB565/666/888/101010/121212、YCbCr 4:2:2/4:2:0）、
+  Compression Mode、PPS、Compressed Pixel Stream。
+
+### 注意
+
+- DSI HS packet 只解碼顯示，不輸出到 Pxclk/Data，也不做 frame/line 檢查。
+- 每個 HS burst 只解第一個 packet；同一 burst 內的後續 packet（例如 EoTp）不逐一解析。
+- LP 路徑輸出文字不變（`[rx_stub][lp][DSI]`）。
+
+---
+
+## v1.3.0 (2026-08-05)
+
+### 新增
+
+- `mipi_rx_dphy_stub` 支援 D-PHY Escape entry、LPDT/Trigger/ULPS command decode。
+- `LP_PROTOCOL=0/1/2` 分別提供 AUTO、CSI-2、DSI LP packet 顯示；DSI DCS opcode 額外解碼。
+- LPDT payload 寫入 `LP_DATA_FILE` 文字檔，保留時間、transaction、byte index 與 byte value。
+- 收到 BTA 後執行 reverse-direction hand-off，並可自動送 reverse BTA 歸還 bus。
+- data lane 及 clock lane ULPS entry/exit 與 `T_WAKEUP_PS` 檢查。
+- 新增 `tb_mipi_rx_dphy_lp.v` 與 `make lp` 專用測試。
 
 ---
 

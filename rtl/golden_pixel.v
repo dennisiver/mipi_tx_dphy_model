@@ -65,6 +65,9 @@ endfunction
 // ---------------------------------------------------------------------------
 //  golden_pixel : returns the expected pixel value for (frame,row,col)
 //
+//  hsize   : samples per line (RAW = Hsize, YUV422 = 2*Hsize); col runs
+//            0..hsize-1, so row*hsize + col is a linear sample index.
+//
 //  pattern : 0 = sequential / ramp   (running index, wraps with bit width)
 //            1 = horizontal gradient (value follows column)
 //            2 = vertical   gradient (value follows row)

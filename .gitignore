@@ -1,2 +1,5 @@
 *.vvp
 *.vcd
+mipi_lp_data*.txt
+rx*_frame_*.ppm
+.learnings/
