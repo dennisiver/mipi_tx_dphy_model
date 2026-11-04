@@ -2,6 +2,7 @@
 
 | 版本   | 日期       | 說明 |
 |--------|------------|------|
+| v1.6.1 | 2026-11-04 | HS raw dump 依 header 寫到最後一個 packet 的 CRC，不寫 HS-trail byte。 |
 | v1.6.0 | 2026-11-04 | Rx stub 新增 LP / HS raw byte dump（`RAW_DUMP_EN`），LP 與 HS 分成兩個檔案。 |
 | v1.5.0 | 2026-11-03 | Rx stub DSI DCS Long Write 可寫成 RGB888 PPM；新增 `DSI_PPM_EN` / `DSI_HSIZE` / `DSI_VSIZE` parameter。 |
 | v1.4.1 | 2026-10-24 | 修正 YUV422 golden pattern 的行索引（PATTERN 0/5）。 |
@@ -13,6 +14,25 @@
 
 ---
 
+## v1.6.1 (2026-11-04)
+
+### 修正
+
+- **HS raw dump 不再寫入 HS-trail byte**：HS-trail 期間 HS valid 仍為 1 時，stub 會把 trail 的位元收成
+  `00`/`ff` byte。v1.6.0 會把它們寫在行尾，造成 byte 數比 packet 長度多。
+  現在依 header 逐個 packet 計算長度（long `4+WC+2`、short `4`），寫到最後一個 packet 的 CRC 為止。
+- long/short 判斷：CSI-2 為 `DT >= 0x10`；DSI 為 `DT[3:0] >= 9`；AUTO 時 CSI-2 影像 DT 用 CSI-2 規則，
+  其他 DT 用 DSI 規則。
+- 最後一個 packet 之後，每條 lane 剩下的 byte 都是同一個 `00` 或 `ff` 時，判定為 trail。
+
+### 注意
+
+- 同一 burst 內的後續 packet（例如 EoTp `08 0f 0f 01`）仍會寫入。
+- 第一個 packet 一定寫入；packet 長度超過 burst 結尾或 WC 為 X 時，寫出收到的全部 byte，方便除錯。
+- 行首的 byte 數欄位是實際寫入的 byte 數。
+
+---
+
 ## v1.6.0 (2026-11-04)
 
 ### 新增
@@ -21,6 +41,7 @@
 - `RAW_LP_FILE`（預設 `mipi_lp_raw.txt`）：每個 LPDT transaction 寫一行，格式 `transaction bytes data_hex...`。
 - `RAW_HS_FILE`（預設 `mipi_hs_raw.txt`）：每個 HS burst 寫一行，格式 `burst bytes data_hex...`，
   內容是 sync byte 之後依 lane 合併的全部 byte（header、ECC、payload、CRC，以及同一 burst 內的後續 packet）。
+  HS-trail 的處理見 v1.6.1。
 - 行首不寫時間。
 
 ### 注意

@@ -692,18 +692,26 @@ stub 可以把收到的 byte 原樣寫成兩個文字檔，LP 和 HS 各一個�
 - 每個 LPDT transaction 或每個 HS burst 寫一行，格式是 `序號 byte數 hex_byte...`，行首不寫時間。
 - LP 檔：一行是一個 LPDT transaction 的全部 byte，在 Escape exit 時寫出。
   每個 transaction 最多存 `MAXBPL` 個 byte；超過時印 WARNING，只寫前 `MAXBPL` 個。
-- HS 檔：一行是一個 HS burst 在 sync byte（`B8`）之後的全部 byte，依 lane 合併後的順序排列，
+- HS 檔：一行是一個 HS burst 在 sync byte（`B8`）之後的 packet，依 lane 合併後的順序排列，
   包含 packet header、ECC、payload、CRC，以及同一 burst 內的後續 packet（例如 EoTp）。
-  stub 只解析每個 burst 的第一個 packet，但 raw 檔會寫出整個 burst。
+  stub 只解碼每個 burst 的第一個 packet，但 raw 檔會寫出 burst 內的每個 packet。
+- HS 檔依 header 逐個 packet 計算長度，寫到最後一個 packet 的 CRC 為止：
+  - long packet = `4 + WC + 2`，short packet = `4`。
+  - long/short 依 DT 判斷：CSI-2 是 `DT >= 0x10` 為 long；DSI 是 `DT[3:0] >= 9` 為 long。
+    `LP_PROTOCOL=0`（AUTO）時，CSI-2 影像 DT 用 CSI-2 規則，其他 DT 用 DSI 規則。
+  - 最後一個 packet 之後，若每條 lane 剩下的 byte 都是同一個 `00` 或 `ff`，就判定為 HS-trail，不寫入。
+    HS-trail 期間 HS valid 若仍為 1，stub 會把 trail 的位元收成 byte；
+    本 Tx model 的 trail 是 `max(8*UI, 60 ns + 4*UI)`，600 Mbps 時約 5 個 byte。
+  - 第一個 packet 一定寫入。packet 長度超過 burst 結尾，或 WC 是 X 時，寫出收到的全部 byte，不截斷。
 - `LP_DATA_FILE`（每個 byte 一行，含時間）不受影響，仍照原本方式產生。
 
 範例（DSI，320×240 RGB888，WC=961，1 lane）：
 
 ```
-# MIPI D-PHY HS raw receive log (lane-merged burst after the sync byte)
+# MIPI D-PHY HS raw receive log (lane-merged packets after the sync byte, HS-trail dropped)
 # burst bytes data_hex...
-1 967 39 c1 03 xx 2c 00 01 02 ...
-2 967 39 c1 03 xx 3c c0 c1 c2 ...
+1 967 39 c1 03 xx 2c 00 01 02 ... <CRC 2 byte>
+2 971 39 c1 03 xx 3c c0 c1 c2 ... <CRC 2 byte> 08 0f 0f 01
 ```
 
-`967 = 4`（header）`+ 961`（payload）`+ 2`（CRC）。實際 byte 數以 burst 內容為準。
+`967 = 4`（header）`+ 961`（payload）`+ 2`（CRC）。DSI TX 有送 EoTp 時再加 4，等於 971。

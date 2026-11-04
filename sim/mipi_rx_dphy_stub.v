@@ -311,14 +311,71 @@ module mipi_rx_dphy_stub #(
         end
     endtask
 
-    task raw_write_hs;
+    // Long/short by DT.  CSI-2: DT >= 0x10 is long.  DSI: DT[3:0] >= 9 is long.
+    // AUTO follows parse_burst: CSI-2 image DTs are CSI-2, all others are DSI.
+    function raw_is_long;
+        input [5:0] dt;
+        begin
+            if (LP_PROTOCOL == LP_PROTO_CSI2)
+                raw_is_long = (dt >= 6'h10);
+            else if (LP_PROTOCOL == LP_PROTO_AUTO &&
+                     (dt == DT_YUV8 || dt == DT_YUV10 || dt == DT_RAW8 ||
+                      dt == DT_RAW10 || dt == DT_RAW12 || dt == DT_RAW14))
+                raw_is_long = 1'b1;
+            else
+                raw_is_long = (dt[3:0] >= 4'h9);
+        end
+    endfunction
+
+    // HS-trail: every remaining byte of a lane repeats one 00/FF value.
+    // Merged byte k belongs to lane k%LANE_NUM, so compare with byte k-LANE_NUM.
+    function raw_is_trail;
+        input integer p;
         input integer total;
         integer k;
+        reg     ok;
+        begin
+            ok = 1'b1;
+            for (k = p; k < total && ok; k = k + 1) begin
+                if (k < p + LANE_NUM) begin
+                    if (mbyte(k) !== 8'h00 && mbyte(k) !== 8'hFF)
+                        ok = 1'b0;
+                end else if (mbyte(k) !== mbyte(k - LANE_NUM))
+                    ok = 1'b0;
+            end
+            raw_is_trail = ok;
+        end
+    endfunction
+
+    // Write each packet up to its CRC (long: 4+WC+2, short: 4) and drop the
+    // HS-trail bytes after the last packet.  The first packet is always kept;
+    // a packet that runs past the burst end (or has an X WC) keeps every received byte.
+    task raw_write_hs;
+        input integer total;
+        integer k, p, plen, n;
+        reg [7:0] di;
+        reg       done;
         begin
             if (raw_hs_fd != 0) begin
                 raw_hs_burst = raw_hs_burst + 1;
-                $fwrite(raw_hs_fd, "%0d %0d", raw_hs_burst, total);
-                for (k = 0; k < total; k = k + 1)
+                p = 0;
+                done = 1'b0;
+                while (!done && p < total) begin
+                    if (p + 4 > total || (p > 0 && raw_is_trail(p, total)))
+                        done = 1'b1;
+                    else begin
+                        di = mbyte(p);
+                        plen = raw_is_long(di[5:0]) ? (6 + {mbyte(p+2), mbyte(p+1)}) : 4;
+                        if ((^plen) === 1'bx || p + plen > total) begin
+                            p = total;
+                            done = 1'b1;
+                        end else
+                            p = p + plen;
+                    end
+                end
+                n = (p == 0) ? total : p;
+                $fwrite(raw_hs_fd, "%0d %0d", raw_hs_burst, n);
+                for (k = 0; k < n; k = k + 1)
                     $fwrite(raw_hs_fd, " %02x", mbyte(k));
                 $fwrite(raw_hs_fd, "\n");
                 $fflush(raw_hs_fd);
@@ -1083,7 +1140,7 @@ module mipi_rx_dphy_stub #(
             end
             $fwrite(raw_lp_fd, "# MIPI D-PHY LPDT raw receive log\n");
             $fwrite(raw_lp_fd, "# transaction bytes data_hex...\n");
-            $fwrite(raw_hs_fd, "# MIPI D-PHY HS raw receive log (lane-merged burst after the sync byte)\n");
+            $fwrite(raw_hs_fd, "# MIPI D-PHY HS raw receive log (lane-merged packets after the sync byte, HS-trail dropped)\n");
             $fwrite(raw_hs_fd, "# burst bytes data_hex...\n");
             $display("[rx_stub][raw] dumping LPDT to %0s, HS bursts to %0s", RAW_LP_FILE, RAW_HS_FILE);
         end
